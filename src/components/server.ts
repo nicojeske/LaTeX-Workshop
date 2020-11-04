@@ -22,16 +22,13 @@ export class Server {
         const configuration = vscode.workspace.getConfiguration('latex-workshop')
         const viewerPort = configuration.get('viewer.pdf.internal.port') as number
         const viewerURL = configuration.get('viewer.pdf.internal.url') as string
-        this.httpServer.listen(viewerPort, '127.0.0.1', undefined, () => {
+        this.httpServer.listen(viewerPort, '0.0.0.0', undefined, () => {
             const {address, port} = this.httpServer.address() as AddressInfo
             this.port = port
             this.url = viewerURL.replace('%p', port.toString())
-            if (address.includes(':')) {
-                // the colon is reserved in URL to separate IPv4 address from port number. IPv6 address needs to be enclosed in square brackets when used in URL
-                this.address = `[${address}]:${port}`
-            } else {
-                this.address = `${address}:${port}`
-            }
+
+            this.address = `${address}:${port}`
+
             this.extension.logger.addLogMessage(`Server created on ${this.address}`)
         })
         this.httpServer.on('error', (err) => {
