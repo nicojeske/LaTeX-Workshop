@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 import * as path from 'path'
-import type {MathPreview, TexMathEnv} from '../providers/preview/mathpreview'
+import type {TexMathEnv} from '../providers/preview/mathpreview'
 import {openWebviewPanel} from '../utils/webview'
 import type {Extension} from '../main'
 
@@ -13,6 +13,11 @@ type UpdateEvent = {
     event: vscode.TextEditorSelectionChangeEvent
 }
 
+function resourcesFolder(extensionRoot: string) {
+    const folder = path.join(extensionRoot, 'resources', 'mathpreviewpanel')
+    return vscode.Uri.file(folder)
+}
+
 export class MathPreviewPanelSerializer implements vscode.WebviewPanelSerializer {
     private readonly extension: Extension
 
@@ -22,6 +27,10 @@ export class MathPreviewPanelSerializer implements vscode.WebviewPanelSerializer
 
     deserializeWebviewPanel(panel: vscode.WebviewPanel) {
         this.extension.mathPreviewPanel.initializePanel(panel)
+        panel.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [resourcesFolder(this.extension.extensionRoot)]
+        }
         panel.webview.html = this.extension.mathPreviewPanel.getHtml(panel.webview)
         this.extension.logger.addLogMessage('Math preview panel: restored')
         return Promise.resolve()
@@ -31,7 +40,6 @@ export class MathPreviewPanelSerializer implements vscode.WebviewPanelSerializer
 
 export class MathPreviewPanel {
     private readonly extension: Extension
-    private readonly mathPreview: MathPreview
     private panel?: vscode.WebviewPanel
     private prevEditTime = 0
     private prevDocumentUri?: string
@@ -41,11 +49,15 @@ export class MathPreviewPanel {
 
     constructor(extension: Extension) {
         this.extension = extension
-        this.mathPreview = extension.mathPreview
         this.mathPreviewPanelSerializer = new MathPreviewPanelSerializer(extension)
     }
 
+    private get mathPreview() {
+        return this.extension.mathPreview
+    }
+
     async open() {
+        const activeDocument = vscode.window.activeTextEditor?.document
         if (this.panel) {
             if (!this.panel.visible) {
                 this.panel.reveal(undefined, true)
@@ -57,13 +69,19 @@ export class MathPreviewPanel {
             'latex-workshop-mathpreview',
             'Math Preview',
             { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
-            { enableScripts: true, retainContextWhenHidden: true }
+            {
+                enableScripts: true,
+                localResourceRoots: [resourcesFolder(this.extension.extensionRoot)],
+                retainContextWhenHidden: true
+            }
         )
         this.initializePanel(panel)
         panel.webview.html = this.getHtml(panel.webview)
         const configuration = vscode.workspace.getConfiguration('latex-workshop')
         const editorGroup = configuration.get('mathpreviewpanel.editorGroup') as string
-        await openWebviewPanel(panel, editorGroup)
+        if (activeDocument) {
+            await openWebviewPanel(panel, editorGroup, activeDocument)
+        }
         this.extension.logger.addLogMessage('Math preview panel: opened')
     }
 
@@ -99,6 +117,14 @@ export class MathPreviewPanel {
         this.panel = undefined
         this.clearCache()
         this.extension.logger.addLogMessage('Math preview panel: closed')
+    }
+
+    toggle() {
+        if (this.panel) {
+            this.close()
+        } else {
+            this.open()
+        }
     }
 
     private clearCache() {

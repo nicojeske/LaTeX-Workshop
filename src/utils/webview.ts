@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 import * as path from 'path'
-import {Extension} from '../main'
+import type {Extension} from '../main'
 
 
 export function replaceWebviewPlaceholders(content: string, extension: Extension, webview: vscode.Webview): string {
@@ -11,11 +11,19 @@ export function replaceWebviewPlaceholders(content: string, extension: Extension
                   .replace(/%VSCODE_CSP%/g, webview.cspSource)
 }
 
-export async function openWebviewPanel(panel: vscode.WebviewPanel, tabEditorGroup: string) {
-    const editor = vscode.window.activeTextEditor
-    if (!editor) {
-        return
-    }
+/**
+ *
+ * @param panel
+ * @param tabEditorGroup
+ * @param activeDocument The document we set the focus back to. We should get the document before calling createWebviewPanel.
+ * @param preserveFocus
+ */
+export async function openWebviewPanel(
+    panel: vscode.WebviewPanel,
+    tabEditorGroup: string,
+    activeDocument: vscode.TextDocument,
+    preserveFocus = true
+) {
     // We need to turn the viewer into the active editor to move it to an other editor group
     panel.reveal(undefined, false)
     let focusAction: string | undefined
@@ -46,9 +54,12 @@ export async function openWebviewPanel(panel: vscode.WebviewPanel, tabEditorGrou
     }
     // Then, we set the focus back to the .tex file
     setTimeout(async () => {
-        if (focusAction ) {
+        if (!preserveFocus) {
+            return
+        }
+        if (focusAction) {
             await vscode.commands.executeCommand(focusAction)
         }
-        await vscode.window.showTextDocument(editor.document, vscode.ViewColumn.Active)
+        await vscode.window.showTextDocument(activeDocument, vscode.ViewColumn.Active)
     }, 500)
 }

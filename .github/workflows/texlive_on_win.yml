@@ -1,6 +1,6 @@
 name: TeX Live on Windows
 env:
-  cache-version: v2
+  cache-version: v6
 on: [push]
 
 jobs:
@@ -11,8 +11,9 @@ jobs:
     - uses: actions/checkout@v2
     - name: Set up PATH
       run: |
-        echo "##[add-path]C:\strawberry\c\bin;C:\strawberry\perl\site\bin;C:\strawberry\perl\bin"
-        echo "##[add-path]D:\texlive\bin\win32"
+        echo "C:\strawberry\c\bin;C:\strawberry\perl\site\bin;C:\strawberry\perl\bin" >> $GITHUB_PATH
+        echo "D:\texlive\bin\win32" >> $GITHUB_PATH
+      shell: bash
     - name: Cache TeX Live
       id: cache-texlive
       uses: actions/cache@v1
@@ -35,11 +36,15 @@ jobs:
     - name: Run tlmgr install
       run: |
         tlmgr install latex-bin platex uplatex tex xetex
-        tlmgr install amsmath graphics tools import subfiles latexmk
+        tlmgr install amsmath graphics tools import subfiles latexmk makeindex
       if: steps.cache-texlive.outputs.cache-hit != 'true'
     - uses: actions/setup-node@v1
       with:
         node-version: 12.x
+    - run: latex -v
+    - run: perl -v
+    - run: perl -MCwd -e 'print $Cwd::VERSION."\n";'
+    - run: latexmk -v
     - run: |
         npm ci
         npm run compile

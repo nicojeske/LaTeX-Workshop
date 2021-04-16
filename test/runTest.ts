@@ -22,7 +22,7 @@ function writeSettingsJson(userDataDir: string) {
     fs.writeFileSync(settingFilePath, settingsJson)
 }
 
-async function runTestsOnEachFixture(targetName: 'build' | 'viewer' | 'completion') {
+async function runTestsOnEachFixture(targetName: 'build' | 'rootfile' | 'viewer' | 'completion') {
     const extensionDevelopmentPath = path.resolve(__dirname, '../../')
     const extensionTestsPath = path.resolve(__dirname, `./${targetName}.index`)
     const tmpdir = tmpFile.dirSync({ unsafeCleanup: true })
@@ -44,7 +44,7 @@ async function runTestsOnEachFixture(targetName: 'build' | 'viewer' | 'completio
     for (const testWorkspace of testBuildWorkspaces) {
         const nodejsTimeout = setTimeout(() => process.exit(1), firstTime ? 3*60000 : 60000)
         await runTests({
-            version: '1.48.0',
+            version: '1.53.2',
             extensionDevelopmentPath,
             extensionTestsPath,
             launchArgs: [
@@ -65,6 +65,7 @@ async function runTestsOnEachFixture(targetName: 'build' | 'viewer' | 'completio
 
 async function main() {
     try {
+        await runTestsOnEachFixture('rootfile')
         await runTestsOnEachFixture('build')
         await runTestsOnEachFixture('viewer')
         await runTestsOnEachFixture('completion')

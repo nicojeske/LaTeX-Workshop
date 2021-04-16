@@ -1,20 +1,9 @@
 import * as vscode from 'vscode'
 import * as path from 'path'
 import { readFileSync } from 'fs'
-import * as fs from 'fs'
 
-import { Extension } from '../main'
+import type { Extension } from '../main'
 import {replaceWebviewPlaceholders} from '../utils/webview'
-
-type IMathSymbol = {
-    name: string,
-    keywords?: string,
-    source: string,
-    snippet: string,
-    category?: string,
-    svg?: string,
-    shrink?: boolean
-}
 
 export class SnippetPanel {
     private readonly extension: Extension
@@ -33,8 +22,6 @@ export class SnippetPanel {
                 this.lastActiveTextEditor = textEditor
             }
         })
-
-        this.loadSnippets()
     }
 
     public showPanel() {
@@ -68,54 +55,7 @@ export class SnippetPanel {
         webviewHtml = replaceWebviewPlaceholders(webviewHtml, this.extension, this.panel.webview)
         this.panel.webview.html = webviewHtml
 
-        this.initialisePanel()
-
         this.panel.webview.onDidReceiveMessage(this.messageReceive.bind(this))
-
-        fs.watchFile(webviewSourcePath, () => {
-            {
-                if (this.panel) {
-                    const htmlStr = readFileSync(webviewSourcePath, { encoding: 'utf8' })
-                    this.panel.webview.html = replaceWebviewPlaceholders(htmlStr, this.extension, this.panel.webview)
-                    this.initialisePanel()
-                }
-            }
-        })
-    }
-
-    private mathSymbols: IMathSymbol[] = []
-
-    private loadSnippets() {
-        const snipetsFile = path.join(this.extension.extensionRoot, 'resources', 'snippetpanel', 'snippetpanel.json')
-        const snippets: {
-            mathSymbols: {
-                [category: string]: IMathSymbol[]
-            }
-        } = JSON.parse(readFileSync(snipetsFile, { encoding: 'utf8' }))
-
-        for (const category in snippets.mathSymbols) {
-            for (let i = 0; i < snippets.mathSymbols[category].length; i++) {
-                const symbol = snippets.mathSymbols[category][i]
-                symbol.category = category
-                if (symbol.keywords === undefined) {
-                    symbol.keywords = ''
-                }
-                this.mathSymbols.push(symbol)
-            }
-        }
-    }
-
-    private initialisePanel() {
-        if (this.panel === undefined) {
-            return
-        }
-
-        this.panel.webview.postMessage({
-            type: 'mathSymbols',
-            mathSymbols: this.mathSymbols
-        })
-
-        this.panel.webview.postMessage({ type: 'initialise' })
     }
 
     private messageReceive(message: { type: string, snippet: string }) {

@@ -2,8 +2,8 @@ import * as vscode from 'vscode'
 import * as fs from 'fs'
 import {bibtexParser} from 'latex-utensils'
 
-import {Extension} from '../../main'
-import {IProvider} from './interface'
+import type {Extension} from '../../main'
+import type {IProvider} from './interface'
 
 export interface Suggestion extends vscode.CompletionItem {
     key: string,
@@ -108,7 +108,7 @@ export class Citation implements IProvider {
      * @param file The path of a LaTeX file. If `undefined`, the keys of `bibEntries` are used.
      * @param visitedTeX Internal use only.
      */
-    private getIncludedBibs(file?: string, visitedTeX: string[] = []) {
+    private getIncludedBibs(file?: string, visitedTeX: string[] = []): string[] {
         if (file === undefined) {
             // Only happens when rootFile is undefined
             return Object.keys(this.bibEntries)
@@ -268,7 +268,7 @@ export class Citation implements IProvider {
         return items
     }
 
-    private deParenthesis(str: string) {
+    private deParenthesis(str: string): string {
         // Remove wrapping { }
         // Extract the content of \url{}
         return str.replace(/\\url{([^\\{}]+)}/g, '$1').replace(/{+([^\\{}]+)}+/g, '$1')

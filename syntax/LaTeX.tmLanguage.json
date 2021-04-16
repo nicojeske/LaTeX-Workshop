@@ -129,7 +129,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -148,7 +148,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -167,7 +167,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -186,7 +186,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -205,7 +205,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -224,7 +224,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -243,7 +243,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -262,7 +262,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -281,7 +281,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -300,7 +300,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -319,7 +319,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -338,7 +338,7 @@
             "1": {
               "patterns": [
                 {
-                  "include": "#minted-env"
+                  "include": "#env-mandatory-arg"
                 }
               ]
             }
@@ -410,7 +410,7 @@
       "end": "(\\\\end\\{\\2\\}(?:\\s*\\n)?)"
     },
     {
-      "begin": "((?:\\s*)\\\\begin\\{((?:pycode|sageblock|sagesilent|sageverbatim|sageexample|sagecommandline)(?:\\*)?)\\}(?:\\[.*\\])?)",
+      "begin": "((?:\\s*)\\\\begin\\{((?:(?:(?:py|pylab|sympy)(?:code|verbatim|block|concode|console|converbatim))|sageblock|sagesilent|sageverbatim|sageexample|sagecommandline)(?:\\*)?)\\}(?:\\[.*\\])?)",
       "captures": {
         "1": {
           "patterns": [
@@ -761,6 +761,40 @@
       },
       "contentName": "meta.math.block.latex support.class.math.block.environment.latex",
       "end": "(?:\\s*)((\\\\)end)(\\{)(\\4)(\\})(?:\\s*\\n)?",
+      "name": "meta.function.environment.math.latex",
+      "patterns": [
+        {
+          "match": "(?<!\\\\)&",
+          "name": "keyword.control.equation.align.latex"
+        },
+        {
+          "match": "\\\\\\\\",
+          "name": "keyword.control.equation.newline.latex"
+        },
+        {
+          "include": "#definition-label"
+        },
+        {
+          "include": "text.tex#math"
+        },
+        {
+          "include": "$base"
+        }
+      ]
+    },
+    {
+      "begin": "(\\\\begin\\{empheq\\}(?:\\[.*\\])?)",
+      "captures": {
+        "1": {
+          "patterns": [
+            {
+              "include": "#env-mandatory-arg"
+            }
+          ]
+        }
+      },
+      "contentName": "meta.math.block.latex support.class.math.block.environment.latex",
+      "end": "(\\\\end\\{empheq\\})",
       "name": "meta.function.environment.math.latex",
       "patterns": [
         {
@@ -1414,6 +1448,53 @@
       "name": "meta.function.verb.latex"
     },
     {
+      "captures": {
+        "1": {
+          "name": "support.function.verb.latex"
+        },
+        "2": {
+          "name": "punctuation.definition.function.latex"
+        },
+        "3": {
+          "patterns": [
+            {
+              "include": "#optional-arg"
+            }
+          ]
+        },
+        "4": {
+          "name": "punctuation.definition.verb.latex"
+        },
+        "5": {
+          "name": "source.python",
+          "patterns": [
+            {
+              "include": "source.python"
+            }
+          ]
+        },
+        "6": {
+          "name": "punctuation.definition.verb.latex"
+        },
+        "7": {
+          "name": "punctuation.definition.verb.latex"
+        },
+        "8": {
+          "name": "source.python",
+          "patterns": [
+            {
+              "include": "source.python"
+            }
+          ]
+        },
+        "9": {
+          "name": "punctuation.definition.verb.latex"
+        }
+      },
+      "match": "((\\\\)(?:py|pycon|pylab|pylabcon|sympy|sympycon)[cv]?)((?:\\[[^\\[]*?\\])?)(?:(?:([^a-zA-Z\\{])(.*?)(\\4))|(?:(\\{)(.*?)(\\})))",
+      "name": "meta.function.verb.latex"
+    },
+    {
       "match": "\\\\(?:newline|pagebreak|clearpage|linebreak|pause)(?:\\b)",
       "name": "keyword.control.layout.latex"
     },
@@ -1572,7 +1653,7 @@
         }
       ]
     },
-    "minted-env": {
+    "env-mandatory-arg": {
       "captures": {
         "1": {
           "name": "support.function.be.latex"
@@ -1593,19 +1674,26 @@
           "name": "punctuation.definition.arguments.optional.begin.latex"
         },
         "7": {
-          "name": "punctuation.definition.arguments.optional.end.latex"
+          "patterns":[
+            {
+              "include": "$base"
+            }
+          ]
         },
         "8": {
-          "name": "punctuation.definition.arguments.begin.latex"
+          "name": "punctuation.definition.arguments.optional.end.latex"
         },
         "9": {
-          "name": "variable.parameter.function.latex"
+          "name": "punctuation.definition.arguments.begin.latex"
         },
         "10": {
+          "name": "variable.parameter.function.latex"
+        },
+        "11": {
           "name": "punctuation.definition.arguments.end.latex"
         }
       },
-      "match": "((\\\\)(?:begin|end))(\\{)(lstlisting|minted|pyglist)(\\})(?:(\\[).*(\\]))?(?:(\\{)([a-z]*)(\\}))?"
+      "match": "((\\\\)(?:begin|end))(\\{)([a-z]*)(\\})(?:(\\[)(.*)(\\]))?(?:(\\{)([^{}]*)(\\}))?"
     },
     "code-env": {
       "captures": {
@@ -1631,7 +1719,7 @@
           "name": "punctuation.definition.arguments.optional.end.latex"
         }
       },
-      "match": "(?:\\s*)((\\\\)(?:begin|end))(\\{)([a-z]*code(?:\\*)?|gnuplot|dot2tex|asy|sage[a-z]*)(\\})(?:(\\[).*(\\]))?"
+      "match": "(?:\\s*)((\\\\)(?:begin|end))(\\{)([a-z]+(?:\\*)?)(\\})(?:(\\[).*(\\]))?"
     },
     "definition-label": {
       "begin": "((\\\\)label)(\\{)",

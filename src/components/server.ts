@@ -4,14 +4,14 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as vscode from 'vscode'
 
-import {Extension} from '../main'
-import {AddressInfo} from 'net'
+import type {Extension} from '../main'
+import type {AddressInfo} from 'net'
 import {decodePathWithPrefix, pdfFilePrefix} from '../utils/utils'
 
 export class Server {
     private readonly extension: Extension
-    private httpServer: http.Server
-    private wsServer: ws.Server
+    private readonly httpServer: http.Server
+    private readonly wsServer: ws.Server
     address?: string
     port?: number
     url?: string
@@ -97,6 +97,9 @@ export class Server {
                     break
                 case '.jpg':
                     contentType = 'image/jpg'
+                    break
+                case '.svg':
+                    contentType = 'image/svg+xml'
                     break
                 case '.ico':
                     contentType = 'image/x-icon'

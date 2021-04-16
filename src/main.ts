@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import * as path from 'path'
 import * as process from 'process'
 
+import * as utils from './utils/utils'
 import {Commander} from './commander'
 import {LaTeXCommander} from './components/commander'
 import {Logger} from './components/logger'
@@ -17,12 +18,14 @@ import {Counter} from './components/counter'
 import {TeXMagician} from './components/texmagician'
 import {EnvPair} from './components/envpair'
 import {Section} from './components/section'
-import {Parser as LogParser} from './components/parser/log'
+import {CompilerLogParser} from './components/parser/compilerlog'
+import {LinterLogParser} from './components/parser/linterlog'
 import {UtensilsParser as PEGParser} from './components/parser/syntax'
 
 import {Completer} from './providers/completion'
 import {BibtexCompleter} from './providers/bibtexcompletion'
 import {CodeActions} from './providers/codeactions'
+import {DuplicateLabels} from './components/duplicatelabels'
 import {HoverProvider} from './providers/hover'
 import {GraphicsPreview} from './providers/preview/graphicspreview'
 import {MathPreview} from './providers/preview/mathpreview'
@@ -32,9 +35,10 @@ import {ProjectSymbolProvider} from './providers/projectsymbol'
 import {SectionNodeProvider, StructureTreeView} from './providers/structure'
 import {DefinitionProvider} from './providers/definition'
 import {LatexFormatterProvider} from './providers/latexformatter'
-import {FoldingProvider} from './providers/folding'
+import {FoldingProvider, WeaveFoldingProvider} from './providers/folding'
 import { SnippetPanel } from './components/snippetpanel'
 import { BibtexFormatter, BibtexFormatterProvider } from './providers/bibtexformatter'
+import {SnippetViewProvider} from './providers/snippetview'
 
 import {checkDeprecatedFeatures, newVersionMessage, obsoleteConfigCheck} from './config'
 
@@ -54,16 +58,7 @@ function selectDocumentsWithId(ids: string[]): vscode.DocumentSelector {
    return selector
 }
 
-export function activate(context: vscode.ExtensionContext) {
-    const extension = new Extension()
-    vscode.commands.executeCommand('setContext', 'latex-workshop:enabled', true)
-
-    // let configuration = vscode.workspace.getConfiguration('latex-workshop')
-    // if (configuration.get('bind.altKeymap.enabled')) {
-    //     vscode.commands.executeCommand('setContext', 'latex-workshop:altkeymap', true)
-    // } else {
-    //     vscode.commands.executeCommand('setContext', 'latex-workshop:altkeymap', false)
-    // }
+function registerLatexWorkshopCommands(extension: Extension) {
 
     vscode.commands.registerCommand('latex-workshop.saveWithoutBuilding', () => extension.commander.saveWithoutBuilding())
     vscode.commands.registerCommand('latex-workshop.build', () => extension.commander.build())
@@ -136,6 +131,22 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('latex-workshop.openMathPreviewPanel', () => extension.commander.openMathPreviewPanel())
     vscode.commands.registerCommand('latex-workshop.closeMathPreviewPanel', () => extension.commander.closeMathPreviewPanel())
+    vscode.commands.registerCommand('latex-workshop.toggleMathPreviewPanel', () => extension.commander.toggleMathPreviewPanel())
+
+}
+
+export function activate(context: vscode.ExtensionContext) {
+    const extension = new Extension()
+    vscode.commands.executeCommand('setContext', 'latex-workshop:enabled', true)
+
+    // let configuration = vscode.workspace.getConfiguration('latex-workshop')
+    // if (configuration.get('bind.altKeymap.enabled')) {
+    //     vscode.commands.executeCommand('setContext', 'latex-workshop:altkeymap', true)
+    // } else {
+    //     vscode.commands.executeCommand('setContext', 'latex-workshop:altkeymap', false)
+    // }
+
+    registerLatexWorkshopCommands(extension)
 
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument( (e: vscode.TextDocument) => {
         if (extension.manager.hasTexId(e.languageId)) {
@@ -155,14 +166,11 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }))
 
-    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument((e: vscode.TextDocument) => {
+    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(async (e: vscode.TextDocument) => {
         // This function will be called when a new text is opened, or an inactive editor is reactivated after vscode reload
         if (extension.manager.hasTexId(e.languageId)) {
             obsoleteConfigCheck(extension)
-            extension.manager.findRoot()
-
-            extension.structureProvider.refresh()
-            extension.structureProvider.update()
+            await extension.manager.findRoot()
         }
 
         if (e.languageId === 'pdf') {
@@ -183,7 +191,7 @@ export function activate(context: vscode.ExtensionContext) {
             return
         }
         const configuration = vscode.workspace.getConfiguration('latex-workshop')
-        const content = e.document.getText()
+        const content = utils.stripComments(e.document.getText())
         extension.manager.cachedContent[e.document.fileName].content = content
         if (configuration.get('intellisense.update.aggressive.enabled')) {
             if (updateCompleter) {
@@ -191,22 +199,20 @@ export function activate(context: vscode.ExtensionContext) {
             }
             updateCompleter = setTimeout(() => {
                 const file = e.document.uri.fsPath
+                extension.manager.parseFileAndSubs(file, extension.manager.rootFile)
                 extension.manager.updateCompleter(file, content)
             }, configuration.get('intellisense.update.delay', 1000))
         }
     }))
 
     let isLaTeXActive = false
-    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((e: vscode.TextEditor | undefined) => {
+    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(async (e: vscode.TextEditor | undefined) => {
         const configuration = vscode.workspace.getConfiguration('latex-workshop')
         if (vscode.window.visibleTextEditors.filter(editor => extension.manager.hasTexId(editor.document.languageId)).length > 0) {
             extension.logger.status.show()
             vscode.commands.executeCommand('setContext', 'latex-workshop:enabled', true).then(() => {
-                const gits = vscode.window.visibleTextEditors.filter(editor => editor.document.uri.scheme === 'git')
-                if (configuration.get('view.autoFocus.enabled') && !isLaTeXActive && gits.length === 0) {
+                if (configuration.get('view.autoFocus.enabled') && !isLaTeXActive) {
                     vscode.commands.executeCommand('workbench.view.extension.latex').then(() => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup'))
-                } else if (gits.length > 0) {
-                    vscode.commands.executeCommand('workbench.view.scm').then(() => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup'))
                 }
                 isLaTeXActive = true
             })
@@ -216,14 +222,15 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         if (e && extension.manager.hasTexId(e.document.languageId)) {
-            extension.linter.lintActiveFileIfEnabled()
-            extension.manager.findRoot()
+            await extension.manager.findRoot()
+            extension.linter.lintRootFileIfEnabled()
         } else {
             isLaTeXActive = false
         }
     }))
 
     const latexSelector = selectDocumentsWithId(['latex', 'latex-expl3', 'jlweave', 'rsweave'])
+    const weaveSelector = selectDocumentsWithId(['jlweave', 'rsweave'])
     const latexDoctexSelector = selectDocumentsWithId(['latex', 'latex-expl3', 'jlweave', 'rsweave', 'doctex'])
     const latexFormatter = new LatexFormatterProvider(extension)
     const bibtexFormatter = new BibtexFormatterProvider(extension)
@@ -247,14 +254,23 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.languages.registerDefinitionProvider(latexSelector, new DefinitionProvider(extension)))
     context.subscriptions.push(vscode.languages.registerDocumentSymbolProvider(latexSelector, new DocSymbolProvider(extension)))
     context.subscriptions.push(vscode.languages.registerWorkspaceSymbolProvider(new ProjectSymbolProvider(extension)))
+
+    const configuration = vscode.workspace.getConfiguration('latex-workshop')
+    const userTriggersLatex = configuration.get('intellisense.triggers.latex') as string[]
+    const latexTriggers = ['\\', '{', ',', '(', '['].concat(userTriggersLatex)
+    extension.logger.addLogMessage(`Trigger characters for intellisense of LaTeX documents: ${JSON.stringify(latexTriggers)}`)
+
     context.subscriptions.push(vscode.languages.registerCompletionItemProvider({ scheme: 'file', language: 'tex'}, extension.completer, '\\', '{'))
-    context.subscriptions.push(vscode.languages.registerCompletionItemProvider(latexDoctexSelector, extension.completer, '\\', '{', ',', '(', '['))
+    context.subscriptions.push(vscode.languages.registerCompletionItemProvider(latexDoctexSelector, extension.completer, ...latexTriggers))
     context.subscriptions.push(vscode.languages.registerCompletionItemProvider({ scheme: 'file', language: 'bibtex'}, new BibtexCompleter(extension), '@'))
+
     context.subscriptions.push(vscode.languages.registerCodeActionsProvider(latexSelector, extension.codeActions))
     context.subscriptions.push(vscode.languages.registerFoldingRangeProvider(latexSelector, new FoldingProvider(extension)))
+    context.subscriptions.push(vscode.languages.registerFoldingRangeProvider(weaveSelector, new WeaveFoldingProvider(extension)))
 
-    extension.manager.findRoot()
-    extension.linter.lintRootFileIfEnabled()
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider('latex-snippet-view', new SnippetViewProvider(extension), {webviewOptions: {retainContextWhenHidden: true}}))
+
+    extension.manager.findRoot().then(() => extension.linter.lintRootFileIfEnabled())
     obsoleteConfigCheck(extension)
     conflictExtensionCheck()
     checkDeprecatedFeatures(extension)
@@ -285,13 +301,11 @@ export function activate(context: vscode.ExtensionContext) {
             findRoot: () => extension.manager.findRoot(),
             rootDir: () => extension.manager.rootDir,
             rootFile: () => extension.manager.rootFile,
-            setEnvVar: () => extension.manager.setEnvVar(),
-            cachedContent: () => extension.manager.cachedContent
+            setEnvVar: () => extension.manager.setEnvVar()
         },
         completer: {
             command: {
                 usedPackages: () => {
-                    console.warn('`completer.command.usedPackages` is deprecated. Consider use `manager.cachedContent`.')
                     let allPkgs: string[] = []
                     extension.manager.getIncludedTeX().forEach(tex => {
                         const pkgs = extension.manager.cachedContent[tex].element.package
@@ -324,7 +338,8 @@ export class Extension {
     readonly viewer: Viewer
     readonly server: Server
     readonly locator: Locator
-    readonly logParser: LogParser
+    readonly compilerLogParser: CompilerLogParser
+    readonly linterLogParser: LinterLogParser
     readonly pegParser: PEGParser
     readonly completer: Completer
     readonly linter: Linter
@@ -341,6 +356,7 @@ export class Extension {
     readonly mathPreview: MathPreview
     readonly bibtexFormatter: BibtexFormatter
     readonly mathPreviewPanel: MathPreviewPanel
+    readonly duplicateLabels: DuplicateLabels
 
     constructor() {
         this.extensionRoot = path.resolve(`${__dirname}/../../`)
@@ -348,6 +364,8 @@ export class Extension {
         // adding log messages during initialization.
         this.logger = new Logger()
         this.logger.addLogMessage(`Extension root: ${this.extensionRoot}`)
+        this.logger.addLogMessage(`$PATH: ${process.env.PATH}`)
+        this.logger.addLogMessage(`$SHELL: ${process.env.SHELL}`)
         this.buildInfo = new BuildInfo(this)
         this.commander = new Commander(this)
         this.manager = new Manager(this)
@@ -355,8 +373,10 @@ export class Extension {
         this.viewer = new Viewer(this)
         this.server = new Server(this)
         this.locator = new Locator(this)
-        this.logParser = new LogParser(this)
+        this.compilerLogParser = new CompilerLogParser(this)
+        this.linterLogParser = new LinterLogParser(this)
         this.completer = new Completer(this)
+        this.duplicateLabels = new DuplicateLabels(this)
         this.linter = new Linter(this)
         this.cleaner = new Cleaner(this)
         this.counter = new Counter(this)

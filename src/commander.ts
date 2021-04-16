@@ -2,7 +2,7 @@ import * as vscode from 'vscode'
 import * as fs from 'fs-extra'
 import * as path from 'path'
 
-import {Extension} from './main'
+import type {Extension} from './main'
 import {getLongestBalancedString} from './utils/utils'
 import {TeXDoc} from './components/texdoc'
 
@@ -214,7 +214,7 @@ export class Commander {
         if (uri === undefined || !uri.fsPath.endsWith('.pdf')) {
             return
         }
-        this.extension.viewer.openTab(uri.fsPath, false, 'current')
+        this.extension.viewer.openTab(uri.fsPath, false, 'current', false)
     }
 
     synctex() {
@@ -295,7 +295,7 @@ export class Commander {
     }
 
     log(compiler?: string) {
-        this.extension.logger.addLogMessage('LOG command invoked.')
+        this.extension.logger.addLogMessage(`LOG command invoked: ${compiler || 'default'}`)
         if (compiler) {
             this.extension.logger.showCompilerLog()
             return
@@ -596,7 +596,7 @@ export class Commander {
         if (vscode.window.activeTextEditor === undefined) {
             return
         }
-        this.extension.logParser.parse(vscode.window.activeTextEditor.document.getText())
+        this.extension.compilerLogParser.parse(vscode.window.activeTextEditor.document.getText())
     }
 
     async devParseTeX() {
@@ -638,6 +638,10 @@ export class Commander {
 
     closeMathPreviewPanel() {
         this.extension.mathPreviewPanel.close()
+    }
+
+    toggleMathPreviewPanel() {
+        this.extension.mathPreviewPanel.toggle()
     }
 
 }

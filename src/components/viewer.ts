@@ -1,17 +1,17 @@
 import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as os from 'os'
-import ws from 'ws'
+import type ws from 'ws'
 import * as path from 'path'
 import * as cs from 'cross-spawn'
 import {escapeHtml} from '../utils/utils'
 
-import {Extension} from '../main'
-import {SyncTeXRecordForward} from './locator'
+import type {Extension} from '../main'
+import type {SyncTeXRecordForward} from './locator'
 import {encodePathWithPrefix} from '../utils/utils'
 import {openWebviewPanel} from '../utils/webview'
 
-import {ClientRequest, ServerResponse, PanelRequest, PdfViewerState} from '../../viewer/components/protocol'
+import type {ClientRequest, ServerResponse, PanelRequest, PdfViewerState} from '../../viewer/components/protocol'
 import {getCurrentThemeLightness} from '../utils/theme'
 
 class Client {
@@ -62,25 +62,25 @@ class PdfViewerPanelSerializer implements vscode.WebviewPanelSerializer {
         this.extension = extension
     }
 
-    deserializeWebviewPanel(panel: vscode.WebviewPanel, state0: {state: PdfViewerState}) {
+    async deserializeWebviewPanel(panel: vscode.WebviewPanel, state0: {state: PdfViewerState}): Promise<void> {
         this.extension.logger.addLogMessage(`Restoring the PDF viewer at the column ${panel.viewColumn} from the state: ${JSON.stringify(state0)}`)
         const state = state0.state
         const pdfFilePath = state.path
         if (!pdfFilePath) {
             this.extension.logger.addLogMessage('Error of restoring PDF viewer: the path of PDF file is undefined.')
             panel.webview.html = '<!DOCTYPE html> <html lang="en"><meta charset="utf-8"/><br>The path of PDF file is undefined.</html>'
-            return Promise.resolve()
+            return
         }
         if (!fs.existsSync(pdfFilePath)) {
             const s = escapeHtml(pdfFilePath)
             this.extension.logger.addLogMessage(`Error of restoring PDF viewer: file not found ${pdfFilePath}.`)
             panel.webview.html = `<!DOCTYPE html> <html lang="en"><meta charset="utf-8"/><br>File not found: ${s}</html>`
-            return Promise.resolve()
+            return
         }
-        panel.webview.html = this.extension.viewer.getPDFViewerContent(pdfFilePath)
+        panel.webview.html = await this.extension.viewer.getPDFViewerContent(pdfFilePath)
         const pdfPanel = new PdfViewerPanel(pdfFilePath, panel)
         this.extension.viewer.pushPdfViewerPanel(pdfPanel)
-        return Promise.resolve()
+        return
     }
 
 }
@@ -161,6 +161,7 @@ export class Viewer {
         const pdfFile = this.extension.manager.tex2pdf(sourceFile, respectOutDir)
         if (!fs.existsSync(pdfFile)) {
             this.extension.logger.addLogMessage(`Cannot find PDF file ${pdfFile}`)
+            this.extension.logger.displayStatus('check', 'statusBar.foreground', `Cannot view file PDF file. File not found: ${pdfFile}`, 'warning')
             return
         }
         if (this.extension.server.address === undefined) {
@@ -204,33 +205,36 @@ export class Viewer {
      * @param sourceFile The path of a LaTeX file.
      * @param respectOutDir
      * @param tabEditorGroup
+     * @param preserveFocus
      */
-    async openTab(sourceFile: string, respectOutDir: boolean = true, tabEditorGroup: string) {
+    async openTab(sourceFile: string, respectOutDir: boolean, tabEditorGroup: string, preserveFocus = true) {
         const url = this.checkViewer(sourceFile, respectOutDir)
         if (!url) {
             return
         }
+        const activeDocument = vscode.window.activeTextEditor?.document
         const pdfFile = this.extension.manager.tex2pdf(sourceFile, respectOutDir)
-        const panel = this.createPdfViewerPanel(pdfFile, vscode.ViewColumn.Active)
+        const panel = await this.createPdfViewerPanel(pdfFile, vscode.ViewColumn.Active)
         if (!panel) {
             return
         }
-        await openWebviewPanel(panel.webviewPanel, tabEditorGroup)
+        if (activeDocument) {
+            await openWebviewPanel(panel.webviewPanel, tabEditorGroup, activeDocument, preserveFocus)
+        }
         this.extension.logger.addLogMessage(`Open PDF tab for ${pdfFile}`)
     }
 
-    private createPdfViewerPanel(pdfFilePath: string, viewColumn: vscode.ViewColumn): PdfViewerPanel | undefined {
+    private async createPdfViewerPanel(pdfFilePath: string, viewColumn: vscode.ViewColumn): Promise<PdfViewerPanel | undefined> {
         if (this.extension.server.port === undefined) {
             this.extension.logger.addLogMessage('Server port is undefined')
             return
         }
-
+        const htmlContent = await this.getPDFViewerContent(pdfFilePath)
         const panel = vscode.window.createWebviewPanel('latex-workshop-pdf', path.basename(pdfFilePath), viewColumn, {
             enableScripts: true,
-            retainContextWhenHidden: true,
-            portMapping : [{webviewPort: this.extension.server.port, extensionHostPort: this.extension.server.port}]
+            retainContextWhenHidden: true
         })
-        panel.webview.html = this.getPDFViewerContent(pdfFilePath)
+        panel.webview.html = htmlContent
         const pdfPanel = new PdfViewerPanel(pdfFilePath, panel)
         this.pushPdfViewerPanel(pdfPanel)
         return pdfPanel
@@ -265,13 +269,16 @@ export class Viewer {
      *
      * @param pdfFile The path of a PDF file to be opened.
      */
-    getPDFViewerContent(pdfFile: string): string {
+    async getPDFViewerContent(pdfFile: string): Promise<string> {
         // viewer/viewer.js automatically requests the file to server.ts, and server.ts decodes the encoded path of PDF file.
-        const url = `${this.extension.server.url}/viewer.html?incode=1&file=${encodePathWithPrefix(pdfFile)}`
+        const origUrl = `http://localhost:${this.extension.server.port}/viewer.html?incode=1&file=${encodePathWithPrefix(pdfFile)}`
+        const url = await vscode.env.asExternalUri(vscode.Uri.parse(origUrl))
+        const iframeSrcUrl = url.toString(true)
+        this.extension.logger.addLogMessage(`The internal PDF viewer url: ${iframeSrcUrl}`)
         const rebroadcast: boolean = this.getKeyboardEventConfig()
         return `
-             <!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src ${this.extension.server.url} http://localhost:* http://127.0.0.1:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';"></head>
-            <body><iframe id="preview-panel" class="preview-panel" src="${url}" style="position:absolute; border: none; left: 0; top: 0; width: 100%; height: 100%;">
+            <!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src http://localhost:* http://127.0.0.1:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';"></head>
+            <body><iframe id="preview-panel" class="preview-panel" src="${iframeSrcUrl}" style="position:absolute; border: none; left: 0; top: 0; width: 100%; height: 100%;">
             </iframe>
             <script>
             // when the iframe loads, or when the tab gets focus again later, move the
@@ -297,8 +304,10 @@ export class Viewer {
                 switch (e.data.type) {
                     case 'initialized': {
                         const state = vsStore.getState();
-                        state.type = 'restore_state';
-                        iframe.contentWindow.postMessage(state, '*');
+                        if (state) {
+                            state.type = 'restore_state';
+                            iframe.contentWindow.postMessage(state, '*');
+                        }
                         break;
                     }
                     case 'keyboard_event': {
@@ -352,6 +361,7 @@ export class Viewer {
         if (args) {
             args = args.map(arg => arg.replace('%PDF%', pdfFile))
         }
+        this.extension.logger.addLogMessage(`Execute the external PDF viewer: command ${command}, args ${args}`)
         this.extension.manager.setEnvVar()
         cs.spawn(command, args, {cwd: path.dirname(sourceFile), detached: true})
         this.extension.logger.addLogMessage(`Open external viewer for ${pdfFile}`)

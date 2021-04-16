@@ -3,19 +3,37 @@ import * as fs from 'fs'
 import * as path from 'path'
 import {latexParser} from 'latex-utensils'
 
-import {Extension} from '../../main'
-import {IProvider} from './interface'
+import type {Extension} from '../../main'
+import type {IProvider} from './interface'
 
-export interface Suggestion extends vscode.CompletionItem {
-    file: string, // The file that defines the ref
-    position: vscode.Position, // The position that defines the ref
-    prevIndex?: {refNumber: string, pageNumber: string} // Stores the ref number
+export interface ReferenceEntry extends vscode.CompletionItem {
+    /**
+     *  The file that defines the ref.
+     */
+    file: string,
+    /**
+     * The position that defines the ref.
+     */
+    position: vscode.Position,
+    /**
+     *  Stores the ref number.
+     */
+    prevIndex?: {refNumber: string, pageNumber: string}
+}
+
+export type ReferenceDocType = {
+    documentation: ReferenceEntry['documentation'],
+    file: ReferenceEntry['file'],
+    position: {line: number, character: number},
+    key: string,
+    label: ReferenceEntry['label'],
+    prevIndex: ReferenceEntry['prevIndex']
 }
 
 export class Reference implements IProvider {
     private readonly extension: Extension
     // Here we use an object instead of an array for de-duplication
-    private readonly suggestions: {[id: string]: Suggestion} = {}
+    private readonly suggestions: {[id: string]: ReferenceEntry} = {}
     private prevIndexObj: { [k: string]: {refNumber: string, pageNumber: string} } = {}
 
     constructor(extension: Extension) {
@@ -36,6 +54,18 @@ export class Reference implements IProvider {
         for (const key of keys) {
             const sug = this.suggestions[key]
             if (sug) {
+                const data: ReferenceDocType = {
+                    documentation: sug.documentation,
+                    file: sug.file,
+                    position: {
+                        line: sug.position.line,
+                        character: sug.position.character
+                    },
+                    key,
+                    label: sug.label,
+                    prevIndex: sug.prevIndex
+                }
+                sug.documentation = JSON.stringify(data)
                 items.push(sug)
             } else {
                 items.push({label: key})
@@ -61,7 +91,7 @@ export class Reference implements IProvider {
         }
     }
 
-    getRefDict(): {[key: string]: Suggestion} {
+    getRefDict(): {[key: string]: ReferenceEntry} {
         if (this.suggestions) {
             this.updateAll()
         }
@@ -97,7 +127,7 @@ export class Reference implements IProvider {
                 refList.push(ref.label)
             })
         })
-        // Remove references that has been deleted
+        // Remove references that have been deleted
         Object.keys(this.suggestions).forEach(key => {
             if (!refList.includes(key)) {
                 delete this.suggestions[key]
@@ -153,7 +183,7 @@ export class Reference implements IProvider {
         return refs
     }
 
-    private getRefFromContent(content: string) {
+    private getRefFromContent(content: string): vscode.CompletionItem[] {
         const refReg = /(?:\\label(?:\[[^[\]{}]*\])?|(?:^|[,\s])label=){([^}]*)}/gm
         const refs: vscode.CompletionItem[] = []
         const refList: string[] = []

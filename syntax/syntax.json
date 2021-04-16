@@ -7,11 +7,39 @@
 		["[", "]"],
 		["(", ")"],
 		["\\left(", "\\right)"],
+		["\\left(", "\\right."],
+		["\\left.", "\\right)"],
 		["\\left[", "\\right]"],
+		["\\left[", "\\right."],
+		["\\left.", "\\right]"],
 		["\\left\\{", "\\right\\}"],
+		["\\left\\{", "\\right."],
+		["\\left.", "\\right\\}"],
 		["\\left<", "\\right>"]
 	],
 	"autoClosingPairs": [
+		["\\begin{", ""],
+		["\\left(", ""],
+		["\\left[", ""],
+		["\\left{", ""],
+		["\\bigl(", ""],
+		["\\bigl[", ""],
+		["\\bigl{", ""],
+		["\\Bigl(", ""],
+		["\\Bigl[", ""],
+		["\\Bigl{", ""],
+		["\\biggl(", ""],
+		["\\biggl[", ""],
+		["\\biggl{", ""],
+		["\\Biggl(", ""],
+		["\\Biggl[", ""],
+		["\\Biggl{", ""],
+		["\\(", ""],
+		["\\[", ""],
+		["\\{", ""],
+		["@(", ""],
+		["@[", ""],
+		["@{", ""],
 		["{", "}"],
 		["[", "]"],
 		["(", ")"],
@@ -29,12 +57,6 @@
 	"indentationRules": {
 		"increaseIndentPattern": "\\\\begin{(?!document)([^}]*)}(?!.*\\\\end{\\1})",
 		"decreaseIndentPattern": "^\\s*\\\\end{(?!document)"
-	},
-	"folding": {
-		"markers": {
-			"start": "^\\s*%\\s*#?region\\b.*",
-			"end": "^\\s*%\\s*#?endregion\\b.*"
-		}
 	},
 	"autoCloseBefore": ";:.,=}])>\\` \n\t$",
 	"wordPattern": "(__)|(\\*\\*)|(@.)|(\\.\\.\\.)|([^\\s`'\"~_!?|$#@%^&*\\-=+;:,.<>(){}[\\]\\\\\\/]{2,})"

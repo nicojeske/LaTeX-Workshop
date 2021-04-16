@@ -2,11 +2,10 @@ import * as vscode from 'vscode'
 import * as fs from 'fs-extra'
 import * as path from 'path'
 import * as micromatch from 'micromatch'
-import * as cp from 'child_process'
 import * as utils from '../../utils/utils'
 
-import {Extension} from '../../main'
-import {IProvider} from './interface'
+import type {Extension} from '../../main'
+import type {IProvider} from './interface'
 
 const ignoreFiles = ['**/.vscode', '**/.vscodeignore', '**/.gitignore']
 
@@ -20,26 +19,14 @@ export class Input implements IProvider {
 
     private filterIgnoredFiles(files: string[], baseDir: string): string[] {
         const excludeGlob = (Object.keys(vscode.workspace.getConfiguration('files', null).get('exclude') || {})).concat(vscode.workspace.getConfiguration('latex-workshop').get('intellisense.file.exclude') || [] ).concat(ignoreFiles)
-        let gitIgnoredFiles: string[] = []
-        /* Check .gitignore if needed */
-        if (vscode.workspace.getConfiguration('search', null).get('useIgnoreFiles')) {
-            try {
-                gitIgnoredFiles = (cp.execSync('git check-ignore ' + files.join(' '), {cwd: baseDir})).toString().split('\n')
-            } catch (ex) { }
-        }
         return files.filter(file => {
             const filePath = path.resolve(baseDir, file)
-            /* Check if the file should be ignored */
-            if ((gitIgnoredFiles.includes(file)) || micromatch.any(filePath, excludeGlob, {basename: true})) {
-                return false
-            } else {
-                return true
-            }
+            return !micromatch.isMatch(filePath, excludeGlob, {basename: true})
         })
     }
 
     getGraphicsPath(filePath: string) {
-        const content = utils.stripComments(fs.readFileSync(filePath, 'utf-8'), '%')
+        const content = utils.stripComments(fs.readFileSync(filePath, 'utf-8'))
         const regex = /\\graphicspath{[\s\n]*((?:{[^{}]*}[\s\n]*)*)}/g
         let result: string[] | null
         do {

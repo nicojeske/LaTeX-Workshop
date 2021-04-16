@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 import * as utils from '../utils/utils'
-import { Extension } from '../main'
+import type { Extension } from '../main'
 
 
 function regexpAllMatches(str: string, reg: RegExp) {
@@ -43,7 +43,7 @@ export class EnvPair {
     }
 
     private tokenizeLine(document: vscode.TextDocument, pos: vscode.Position): MatchEnv | null {
-        const line = utils.stripComments(document.lineAt(pos).text, '%')
+        const line = utils.stripComments(document.lineAt(pos).text)
         const ind = pos.character
         if (ind > line.length) {
             return null
@@ -105,7 +105,7 @@ export class EnvPair {
             return this.delimiters[key].end
         })
         while (true) {
-            line = utils.stripComments(line, '%')
+            line = utils.stripComments(line)
             let allMatches = regexpAllMatches(line, patRegexp)
             if (dir === -1) {
                 allMatches = allMatches.reverse()

@@ -55,14 +55,6 @@ class LateXWorkshopPdfViewer implements ILatexWorkshopPdfViewer {
 
         this.setupWebSocket()
 
-        this.onWillStartPdfViewer( () => {
-            // PDFViewerApplication detects whether it's embedded in an iframe (window.parent !== window)
-            // and if so it behaves more "discretely", eg it disables its history mechanism.
-            // We dont want that, so we unset the flag here (to keep viewer.js as vanilla as possible)
-            // https://github.com/James-Yu/LaTeX-Workshop/pull/447
-            PDFViewerApplication.isViewerEmbedded = false
-        })
-
         this.onDidStartPdfViewer( () => {
             utils.callCbOnDidOpenWebSocket(this.socket, () => {
                 this.send({type:'request_params', path:this.pdfFilePath})
@@ -230,7 +222,13 @@ class LateXWorkshopPdfViewer implements ILatexWorkshopPdfViewer {
 
                     // set positions before and after SyncTeX to viewerHistory
                     this.viewerHistory.set(container.scrollTop)
-                    container.scrollTop = scrollY - document.body.offsetHeight * 0.4
+                    if (PDFViewerApplication.pdfViewer.scrollMode === 1) {
+                        // horizontal scrolling
+                        container.scrollLeft = page.offsetLeft
+                    } else {
+                        // vertical scrolling
+                        container.scrollTop = scrollY - document.body.offsetHeight * 0.4
+                    }
                     this.viewerHistory.set(container.scrollTop)
 
                     const indicator = document.getElementById('synctex-indicator') as HTMLElement

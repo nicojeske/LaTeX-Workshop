@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 import * as cs from 'cross-spawn'
-import {Extension} from 'src/main'
+import type {Extension} from 'src/main'
 
 export class TeXDoc {
     private readonly extension: Extension
@@ -12,8 +12,11 @@ export class TeXDoc {
     private runTexdoc(pkg: string) {
         const configuration = vscode.workspace.getConfiguration('latex-workshop')
         const texdocPath = configuration.get('texdoc.path') as string
-        const texdocArgs = Object.assign([], configuration.get('texdoc.args') as string[])
+        const texdocArgs = Array.from(configuration.get('texdoc.args') as string[])
         texdocArgs.push(pkg)
+        this.extension.logger.addLogMessage('Run texdoc.')
+        this.extension.logger.addLogMessage(`texdoc path: ${texdocPath}`)
+        this.extension.logger.addLogMessage(`texdoc args: ${texdocArgs}`)
         const proc = cs.spawn(texdocPath, texdocArgs)
 
         let stdout = ''
@@ -44,6 +47,8 @@ export class TeXDoc {
                     this.extension.logger.addLogMessage(`Opening documentation for ${pkg}.`)
                 }
             }
+            this.extension.logger.addLogMessage(`texdoc stdout: ${stdout}`)
+            this.extension.logger.addLogMessage(`texdoc stderr: ${stderr}`)
         })
     }
 

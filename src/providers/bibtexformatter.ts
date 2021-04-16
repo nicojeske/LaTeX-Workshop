@@ -3,7 +3,7 @@ import {bibtexParser} from 'latex-utensils'
 import {performance} from 'perf_hooks'
 
 import * as bibtexUtils from '../utils/bibtexutils'
-import {Extension} from '../main'
+import type {Extension} from '../main'
 
 export class BibtexFormatter {
 
@@ -56,15 +56,24 @@ export class BibtexFormatter {
         const config = vscode.workspace.getConfiguration('latex-workshop')
         const handleDuplicates = config.get('bibtex-format.handleDuplicates') as 'Ignore Duplicates' | 'Highlight Duplicates' | 'Comment Duplicates'
         const leftright = config.get('bibtex-format.surround') === 'Curly braces' ? [ '{', '}' ] : [ '"', '"']
-        const tabs = { '2 spaces': '  ', '4 spaces': '    ', 'tab': '\t' }
+        let tabs: string | undefined = bibtexUtils.getBibtexFormatTab(config)
+        if (tabs === undefined) {
+            this.extension.logger.addLogMessage(`Wrong value for bibtex-format.tab: ${config.get('bibtex-format.tab')}`)
+            this.extension.logger.addLogMessage('Setting bibtex-format.tab to \'2 spaces\'')
+            tabs = '  '
+        }
         const configuration: bibtexUtils.BibtexFormatConfig = {
-            tab: tabs[config.get('bibtex-format.tab') as ('2 spaces' | '4 spaces' | 'tab')],
+            tab: tabs,
             case: config.get('bibtex-format.case') as ('UPPERCASE' | 'lowercase'),
             left: leftright[0],
             right: leftright[1],
             trailingComma: config.get('bibtex-format.trailingComma') as boolean,
-            sort: config.get('bibtex-format.sortby') as string[]
+            sort: config.get('bibtex-format.sortby') as string[],
+            alignOnEqual: config.get('bibtex-format.align-equal.enabled') as boolean,
+            sortFields: config.get('bibtex-fields.sort.enabled') as boolean,
+            fieldsOrder: config.get('bibtex-fields.order') as string[]
         }
+        this.extension.logger.addLogMessage(`Bibtex format config: ${JSON.stringify(configuration)}`)
         const lineOffset = range ? range.start.line : 0
         const columnOffset = range ? range.start.character : 0
 
@@ -157,7 +166,7 @@ export class BibtexFormatter {
 }
 
 export class BibtexFormatterProvider implements vscode.DocumentFormattingEditProvider, vscode.DocumentRangeFormattingEditProvider {
-    private formatter: BibtexFormatter
+    private readonly formatter: BibtexFormatter
     extension: Extension
 
     constructor(extension: Extension) {

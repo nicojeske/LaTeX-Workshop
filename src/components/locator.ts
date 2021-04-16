@@ -5,8 +5,8 @@ import * as cp from 'child_process'
 import {SyncTexJs} from './synctex'
 import {replaceArgumentPlaceholders} from '../utils/utils'
 
-import {Extension} from '../main'
-import {ClientRequest} from '../../viewer/components/protocol'
+import type {Extension} from '../main'
+import type {ClientRequest} from '../../viewer/components/protocol'
 
 export type SyncTeXRecordForward = {
     page: number,
@@ -136,7 +136,6 @@ export class Locator {
             return
         }
         if (!pdfFile) {
-            this.extension.manager.findRoot()
             pdfFile = this.extension.manager.tex2pdf(rootFile)
         }
         if (vscode.window.activeTextEditor.document.lineCount === line &&

@@ -1,4 +1,5 @@
-import {bibtexParser} from 'latex-utensils'
+import * as vscode from 'vscode'
+import type {bibtexParser} from 'latex-utensils'
 
 export interface BibtexFormatConfig {
     tab: string,
@@ -6,7 +7,31 @@ export interface BibtexFormatConfig {
     right: string,
     case: 'UPPERCASE' | 'lowercase',
     trailingComma: boolean,
-    sort: string[]
+    sort: string[],
+    alignOnEqual: boolean,
+    sortFields: boolean,
+    fieldsOrder: string[]
+}
+
+/**
+ * Read the indentation from vscode configuration
+ *
+ * @param config VSCode workspace configuration
+ * @return the indentation as a string or undefined if the configuration variable is not correct
+ */
+export function getBibtexFormatTab(config: vscode.WorkspaceConfiguration): string | undefined {
+    const tab = config.get('bibtex-format.tab') as string
+    if (tab === 'tab') {
+        return '\t'
+    } else {
+        const res = /^(\d+)( spaces)?$/.exec(tab)
+        if (res) {
+            const nSpaces = parseInt(res[1], 10)
+            return ' '.repeat(nSpaces)
+        } else {
+            return undefined
+        }
+    }
 }
 
 /**
@@ -66,8 +91,8 @@ function bibtexSortByField(fieldName: string, a: bibtexParser.Entry, b: bibtexPa
     }
 
     // Remove braces to sort properly
-    fieldA = fieldA.replace(/{|}/, '')
-    fieldB = fieldB.replace(/{|}/, '')
+    fieldA = fieldA.replace(/{|}/g, '')
+    fieldB = fieldB.replace(/{|}/g, '')
 
     return fieldA.localeCompare(fieldB)
 }
@@ -91,7 +116,7 @@ function bibtexSortByType(a: bibtexParser.Entry, b: bibtexParser.Entry): number 
 /**
  * Creates an aligned string from a bibtexParser.Entry
  * @param entry the bibtexParser.Entry
- * @param config from `latex-workshop.bibtex-format`
+ * @param config the bibtex format options
  */
 export function bibtexFormat(entry: bibtexParser.Entry, config: BibtexFormatConfig): string {
     let s = ''
@@ -100,13 +125,23 @@ export function bibtexFormat(entry: bibtexParser.Entry, config: BibtexFormatConf
 
     // Find the longest field name in entry
     let maxFieldLength = 0
-    entry.content.forEach(field => {
-        maxFieldLength = Math.max(maxFieldLength, field.name.length)
-    })
+    if (config.alignOnEqual) {
+        entry.content.forEach(field => {
+            maxFieldLength = Math.max(maxFieldLength, field.name.length)
+        })
+    }
 
-    entry.content.forEach(field => {
+    let fields: bibtexParser.Field[] = entry.content
+    if (config.sortFields) {
+        fields = entry.content.sort(bibtexSortFields(config.fieldsOrder))
+    }
+
+    fields.forEach(field => {
         s += ',\n' + config.tab + (config.case === 'lowercase' ? field.name : field.name.toUpperCase())
-        s += ' '.repeat(maxFieldLength - field.name.length) + ' = '
+        if (config.alignOnEqual) {
+            s += ' '.repeat(maxFieldLength - field.name.length)
+        }
+        s += ' = '
         s += fieldToString(field.value, config.left, config.right)
     })
 
@@ -136,5 +171,26 @@ function fieldToString(field: bibtexParser.FieldValue, left: string, right: stri
             return field.content.map(value => fieldToString(value, left, right)).reduce((acc, cur) => {return acc + ' # ' + cur})
         default:
             return ''
+    }
+}
+
+/**
+ * Sorting function for bibtex entries
+ * @param keys Array of sorting keys
+ */
+export function bibtexSortFields(keys: string[]): (a: bibtexParser.Field, b: bibtexParser.Field) => number {
+    return function (a, b) {
+        const indexA = keys.indexOf(a.name)
+        const indexB = keys.indexOf(b.name)
+
+        if (indexA === -1 && indexB === -1) {
+            return a.name.localeCompare(b.name)
+        } else if (indexA === -1) {
+           return 1
+        } else if (indexB === -1) {
+           return -1
+        } else {
+            return indexA - indexB
+        }
     }
 }

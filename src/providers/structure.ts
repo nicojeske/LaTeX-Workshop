@@ -2,7 +2,7 @@ import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as path from 'path'
 
-import { Extension } from '../main'
+import type { Extension } from '../main'
 import * as utils from '../utils/utils'
 
 
@@ -12,14 +12,15 @@ export class SectionNodeProvider implements vscode.TreeDataProvider<Section> {
     readonly onDidChangeTreeData: vscode.Event<Section | undefined>
     private readonly hierarchy: string[]
     private readonly sectionDepths: { [key: string]: number } = {}
-    private showLabels: boolean
-    private showNumbers: boolean
+    private readonly showLabels: boolean
+    private readonly showFloats: boolean
+    private readonly showNumbers: boolean
     public root: string = ''
 
     // our data source is a set multi-rooted set of trees
     public ds: Section[] = []
 
-    constructor(private extension: Extension) {
+    constructor(private readonly extension: Extension) {
         this.onDidChangeTreeData = this._onDidChangeTreeData.event
         const configuration = vscode.workspace.getConfiguration('latex-workshop')
         this.hierarchy = configuration.get('view.outline.sections') as string[]
@@ -29,6 +30,7 @@ export class SectionNodeProvider implements vscode.TreeDataProvider<Section> {
             })
         })
         this.showLabels = configuration.get('view.outline.labels.enabled') as boolean
+        this.showFloats = configuration.get('view.outline.floats.enabled') as boolean
         this.showNumbers = configuration.get('view.outline.numbers.enabled') as boolean
     }
 
@@ -42,7 +44,7 @@ export class SectionNodeProvider implements vscode.TreeDataProvider<Section> {
     }
 
     update() {
-        this._onDidChangeTreeData.fire()
+        this._onDidChangeTreeData.fire(undefined)
     }
 
     buildModel(filePath: string, fileStack?: string[], parentStack?: Section[], parentChildren?: Section[], sectionNumber?: number[], imports: boolean = true): Section[] {
@@ -92,11 +94,12 @@ export class SectionNodeProvider implements vscode.TreeDataProvider<Section> {
                 pattern += '|'
             }
         })
-        pattern += ')(?:\\*)?(?:\\[[^\\[\\]\\{\\}]*\\])?){(.*)}))'
+        pattern += ')(\\*)?(?:\\[[^\\[\\]\\{\\}]*\\])?){(.*)}))'
 
         // const inputReg = /^((?:\\(?:input|include|subfile)(?:\[[^\[\]\{\}]*\])?){([^}]*)})|^((?:\\((sub)?section)(?:\[[^\[\]\{\}]*\])?){([^}]*)})/gm
         const inputReg = RegExp(pattern, 'm')
-        const envReg = /(?:\\(begin|end)(?:\[[^[\]]*\])?){(?:(figure|frame|table)\*?)}/m
+        const envNames = this.showFloats ? ['figure', 'frame', 'table'] : ['frame']
+        const envReg = RegExp(`(?:\\\\(begin|end)(?:\\[[^[\\]]*\\])?){(?:(${envNames.join('|')})\\*?)}`, 'm')
         const labelReg = /\\label{([^}]*)}/m
 
         const lines = content.split('\n')
@@ -121,7 +124,7 @@ export class SectionNodeProvider implements vscode.TreeDataProvider<Section> {
                 }
                 const depth = noRoot() ? 0 : currentRoot().depth + 1
                 sectionNumber = this.increment(sectionNumber, depth)
-                const newEnv = new Section(this. formatSectionNumber(sectionNumber) + `${env.name.charAt(0).toUpperCase() + env.name.slice(1)}: ${caption}`, vscode.TreeItemCollapsibleState.Expanded, depth, env.start, env.end, filePath)
+                const newEnv = new Section(this.formatSectionNumber(sectionNumber) + `${env.name.charAt(0).toUpperCase() + env.name.slice(1)}: ${caption}`, vscode.TreeItemCollapsibleState.Expanded, depth, env.start, env.end, filePath)
                 if (noRoot()) {
                     children.push(newEnv)
                 } else {
@@ -150,10 +153,13 @@ export class SectionNodeProvider implements vscode.TreeDataProvider<Section> {
                 // is it a section, a subsection, etc?
                 const heading = result[5]
                 const depth = this.sectionDepths[heading]
-                const title = utils.getLongestBalancedString(result[6])
-
-                sectionNumber = this.increment(sectionNumber, depth)
-                const newSection = new Section(this.formatSectionNumber(sectionNumber) + title, vscode.TreeItemCollapsibleState.Expanded, depth, lineNumber, lines.length - 1, filePath)
+                const title = utils.getLongestBalancedString(result[7])
+                let sectionNumberStr: string = ''
+                if (result[6] === undefined) {
+                    sectionNumber = this.increment(sectionNumber, depth)
+                    sectionNumberStr = this.formatSectionNumber(sectionNumber)
+                }
+                const newSection = new Section(sectionNumberStr + title, vscode.TreeItemCollapsibleState.Expanded, depth, lineNumber, lines.length - 1, filePath)
                 if (prevSection) {
                     prevSection.toLine = lineNumber - 1
                 }
@@ -303,9 +309,9 @@ export class SectionNodeProvider implements vscode.TreeDataProvider<Section> {
         if (env.name === 'frame') {
             // Frame titles can be specified as either \begin{frame}{Frame Title}
             // or \begin{frame} \frametitle{Frame Title}
-            const frametitleRegex = /\\frametitle(?:<[^<>]*>)?(?:\[[^[\]]*\])?{((?:(?:[^{}])|(?:\{[^{}]*\}))+)}/gsm
+            const frametitleRegex = /\\frametitle(?:<[^<>]*>)?(?:\[[^[\]]*\])?{((?:[^{}]|(?:\{[^{}]*\})|\{[^{}]*\{[^{}]*\}[^{}]*\})+)}/gsm
             // \begin{frame}(whitespace){Title} will set the title as long as the whitespace contains no more than 1 newline
-            const beginframeRegex = /\\begin{frame}(?:<[^<>]*>?)?(?:\[[^[\]]*\]){0,2}[\t ]*(?:(?:\r\n|\r|\n)[\t ]*)?{([^{}]*)}/gsm
+            const beginframeRegex = /\\begin{frame}(?:<[^<>]*>?)?(?:\[[^[\]]*\]){0,2}[\t ]*(?:(?:\r\n|\r|\n)[\t ]*)?{((?:[^{}]|(?:\{[^{}]*\})|\{[^{}]*\{[^{}]*\}[^{}]*\})+)}/gsm
 
             // \frametitle can override title set in \begin{frame}{<title>} so we check that first
             result = frametitleRegex.exec(content)
@@ -350,12 +356,12 @@ export class Section extends vscode.TreeItem {
 }
 
 export class StructureTreeView {
-    private _viewer: vscode.TreeView<Section | undefined>
-    private _treeDataProvider: SectionNodeProvider
+    private readonly _viewer: vscode.TreeView<Section | undefined>
+    private readonly _treeDataProvider: SectionNodeProvider
     private _followCursor: boolean = true
 
 
-    constructor(private extension: Extension) {
+    constructor(private readonly extension: Extension) {
         this._treeDataProvider = this.extension.structureProvider
         this._viewer = vscode.window.createTreeView('latex-structure', { treeDataProvider: this._treeDataProvider })
         vscode.commands.registerCommand('latex-structure.toggle-follow-cursor', () => {

@@ -1,11 +1,13 @@
 # Contributing to LaTeX-Workshop
 
+Please notice that we can reject any kinds of pull requests.
+
 ## Quickstart
 
 ```bash
 git clone https://github.com/James-Yu/LaTeX-Workshop.git
 cd ./LaTeX-Workshop
-npm install --no-optional
+npm ci
 code -n .
 ```
 
@@ -21,7 +23,7 @@ Make sure you have installed:
 
 Then run
 
-    npm install --no-optional
+    npm ci
 
 inside the extension workspace to download the node modules needed to build the extension.
 

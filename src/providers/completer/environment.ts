@@ -2,14 +2,19 @@ import * as vscode from 'vscode'
 import * as fs from 'fs-extra'
 import {latexParser} from 'latex-utensils'
 
-import {Extension} from '../../main'
-import {IProvider} from './interface'
+import type {Extension} from '../../main'
+import type {IProvider} from './interface'
+import {resolveCmdEnvFile} from './commandlib/commandfinder'
 
 export interface EnvItemEntry {
     name: string, // Name of the environment, what comes inside \begin{...}
     snippet?: string, // To be inserted after \begin{..}
     package?: string, // The package providing the environment
     detail?: string
+}
+
+function isEnvItemEntry(obj: any): obj is EnvItemEntry {
+    return (typeof obj.name === 'string')
 }
 
 export enum EnvSnippetType { AsName, AsCommand, ForBegin, }
@@ -23,9 +28,9 @@ export class Environment implements IProvider {
     private defaultEnvsAsName: Suggestion[] = []
     private defaultEnvsAsCommand: Suggestion[] = []
     private defaultEnvsForBegin: Suggestion[] = []
-    private packageEnvsAsName: {[pkg: string]: Suggestion[]} = {}
+    private readonly packageEnvsAsName: {[pkg: string]: Suggestion[]} = {}
     private packageEnvsAsCommand: {[pkg: string]: Suggestion[]} = {}
-    private packageEnvsForBegin: {[pkg: string]: Suggestion[]} = {}
+    private readonly packageEnvsForBegin: {[pkg: string]: Suggestion[]} = {}
 
     constructor(extension: Extension) {
         this.extension = extension
@@ -35,15 +40,6 @@ export class Environment implements IProvider {
         this.defaultEnvsAsCommand = []
         this.defaultEnvsForBegin = []
         this.defaultEnvsAsName = []
-        const endCompletion: Suggestion = {
-            label: 'Complete with \\end',
-            sortText: ' ',
-            insertText: new vscode.SnippetString('$1}\n\t$0\n\\end{$1}'),
-            command: { title: 'Post-Action', command: 'editor.action.triggerSuggest' },
-            kind: vscode.CompletionItemKind.Module,
-            package: ''
-        }
-        this.defaultEnvsForBegin.push(endCompletion)
         Object.keys(envs).forEach(key => {
            this.defaultEnvsAsCommand.push(this.entryEnvToCompletion(key, envs[key], EnvSnippetType.AsCommand))
            this.defaultEnvsForBegin.push(this.entryEnvToCompletion(key, envs[key], EnvSnippetType.ForBegin))
@@ -93,7 +89,7 @@ export class Environment implements IProvider {
             return []
         }
         let snippetType: EnvSnippetType = EnvSnippetType.ForBegin
-        if (vscode.window.activeTextEditor.selections.length > 1) {
+        if (vscode.window.activeTextEditor.selections.length > 1 || args.document.lineAt(args.position.line).text.slice(args.position.character).match(/[a-zA-Z*]*}/)) {
             snippetType = EnvSnippetType.AsName
         }
 
@@ -148,23 +144,6 @@ export class Environment implements IProvider {
             }
         })
 
-        if (snippetType === EnvSnippetType.ForBegin) {
-            // If a closing '}' after '\begin{' has already been inserted, we need to remove it as it is already included in the snippets
-            const autoClosing = vscode.workspace.getConfiguration('editor').get('autoClosingBrackets') as string
-            const line = args.document.lineAt(args.position).text
-            const word = line.slice(line.lastIndexOf('\\', args.position.character), args.position.character + 2)
-            if (autoClosing !== 'never' && word.match(/\\begin{[a-zA-Z]*}/)) {
-                const rangeBegin = line.lastIndexOf('{', args.position.character) + 1
-                const snippetRange = new vscode.Range(args.position.line, rangeBegin, args.position.line, args.position.character + 1)
-                suggestions.forEach(c => {c.range = snippetRange} )
-            } else {
-                suggestions.forEach(c => {
-                    if (c.range) {
-                        delete c.range
-                    }
-                })
-            }
-        }
         return suggestions
     }
 
@@ -249,12 +228,24 @@ export class Environment implements IProvider {
     }
 
     private getEnvItemsFromPkg(pkg: string): {[key: string]: EnvItemEntry} {
-        const filePath = `${this.extension.extensionRoot}/data/packages/${pkg}_env.json`
-        if (!fs.existsSync(filePath)) {
+        const filePath: string | undefined = resolveCmdEnvFile(`${pkg}_env.json`, `${this.extension.extensionRoot}/data/packages/`)
+        if (filePath === undefined) {
             return {}
         }
-        const envs: {[key: string]: EnvItemEntry} = JSON.parse(fs.readFileSync(filePath).toString())
-        return envs
+        try {
+            const envs: {[key: string]: EnvItemEntry} = JSON.parse(fs.readFileSync(filePath).toString())
+            Object.keys(envs).forEach(key => {
+                if (! isEnvItemEntry(envs[key])) {
+                    this.extension.logger.addLogMessage(`Cannot parse intellisense file: ${filePath}`)
+                    this.extension.logger.addLogMessage(`Missing field in entry: "${key}": ${JSON.stringify(envs[key])}`)
+                    delete envs[key]
+                }
+            })
+            return envs
+        } catch (e) {
+            this.extension.logger.addLogMessage(`Cannot parse intellisense file: ${filePath}`)
+        }
+        return {}
     }
 
     private getEnvFromPkg(pkg: string, type: EnvSnippetType): Suggestion[] {
@@ -329,9 +320,10 @@ export class Environment implements IProvider {
                 }
             }
             if (snippet.match(/\$\{?0\}?/)) {
+                snippet = snippet.replace(/\$\{?0\}?/, '$${0:$${TM_SELECTED_TEXT}}')
                 snippet += '\n'
             } else {
-                snippet += '\n\t$0\n'
+                snippet += '\n\t${0:${TM_SELECTED_TEXT}}\n'
             }
             if (item.detail) {
                 suggestion.label = item.detail

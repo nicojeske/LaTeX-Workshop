@@ -2,16 +2,22 @@ import * as vscode from 'vscode'
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs-extra'
-import * as cs from 'cross-spawn'
 import * as chokidar from 'chokidar'
 import * as micromatch from 'micromatch'
-import {latexParser} from 'latex-utensils'
+import type {latexParser} from 'latex-utensils'
 import * as utils from '../utils/utils'
 
-import {Extension} from '../main'
-import {Suggestion as CiteEntry} from '../providers/completer/citation'
-import {Suggestion as CmdEntry} from '../providers/completer/command'
-import {Suggestion as EnvEntry} from '../providers/completer/environment'
+import type {Extension} from '../main'
+import type {Suggestion as CiteEntry} from '../providers/completer/citation'
+import type {Suggestion as CmdEntry} from '../providers/completer/command'
+import type {Suggestion as EnvEntry} from '../providers/completer/environment'
+import type {Suggestion as GlossEntry} from 'src/providers/completer/glossary'
+
+import {PdfWatcher} from './managerlib/pdfwatcher'
+import {BibWatcher} from './managerlib/bibwatcher'
+import {FinderUtils} from './managerlib/finderutils'
+import {PathUtils} from './managerlib/pathutils'
+import {IntellisenseWatcher} from './managerlib/intellisensewatcher'
 
 /**
  * The content cache for each LaTeX file `filepath`.
@@ -27,6 +33,7 @@ interface Content {
          */
         element: {
             reference?: vscode.CompletionItem[],
+            glossary?: GlossEntry[],
             environment?: EnvEntry[],
             bibitem?: CiteEntry[],
             command?: CmdEntry[],
@@ -66,16 +73,16 @@ export class Manager {
 
     private readonly extension: Extension
     private fileWatcher?: chokidar.FSWatcher
-    private pdfWatcher?: chokidar.FSWatcher
-    private bibWatcher?: chokidar.FSWatcher
+    private readonly pdfWatcher: PdfWatcher
+    private readonly bibWatcher: BibWatcher
+    private readonly intellisenseWatcher: IntellisenseWatcher
+    private readonly finderUtils: FinderUtils
+    private readonly pathUtils: PathUtils
     private filesWatched: string[] = []
-    private pdfsWatched: string[] = []
-    private bibsWatched: string[] = []
-    private watcherOptions: chokidar.WatchOptions
-    private rsweaveExt: string[] = ['.rnw', '.Rnw', '.rtex', '.Rtex', '.snw', '.Snw']
-    private jlweaveExt: string[] = ['.jnw', '.jtexw']
-    private weaveExt: string[] = []
-    private pdfWatcherOptions: chokidar.WatchOptions
+    private readonly watcherOptions: chokidar.WatchOptions
+    private readonly rsweaveExt: string[] = ['.rnw', '.Rnw', '.rtex', '.Rtex', '.snw', '.Snw']
+    private readonly jlweaveExt: string[] = ['.jnw', '.jtexw']
+    private readonly weaveExt: string[] = []
 
     constructor(extension: Extension) {
         this.extension = extension
@@ -83,7 +90,6 @@ export class Manager {
         const usePolling = configuration.get('latex.watch.usePolling') as boolean
         const interval = configuration.get('latex.watch.interval') as number
         const delay = configuration.get('latex.watch.delay') as number
-        const pdfDelay = configuration.get('latex.watch.pdfDelay') as number
         this.weaveExt = this.jlweaveExt.concat(this.rsweaveExt)
         this.watcherOptions = {
             useFsEvents: false,
@@ -92,14 +98,11 @@ export class Manager {
             binaryInterval: Math.max(interval, 1000),
             awaitWriteFinish: {stabilityThreshold: delay}
         }
-        this.pdfWatcherOptions = {
-            useFsEvents: false,
-            usePolling,
-            interval,
-            binaryInterval: Math.max(interval, 1000),
-            awaitWriteFinish: {stabilityThreshold: pdfDelay}
-        }
-        this.initiatePdfWatcher()
+        this.pdfWatcher = new PdfWatcher(extension)
+        this.bibWatcher = new BibWatcher(extension)
+        this.intellisenseWatcher = new IntellisenseWatcher()
+        this.finderUtils = new FinderUtils(extension)
+        this.pathUtils = new PathUtils(extension)
     }
 
     /**
@@ -240,7 +243,7 @@ export class Manager {
         this.extension.logger.addLogMessage(`Current workspaceRootDir: ${this.workspaceRootDir}`)
         this.localRootFile = undefined
         const findMethods = [
-            () => this.findRootFromMagic(),
+            () => this.finderUtils.findRootFromMagic(),
             () => this.findRootFromActive(),
             () => this.findRootFromCurrentRoot(),
             () => this.findRootInWorkspace()
@@ -257,8 +260,8 @@ export class Manager {
                 this.rootFileLanguageId = this.inferLanguageId(rootFile)
                 this.extension.logger.addLogMessage(`Root file languageId: ${this.rootFileLanguageId}`)
                 this.initiateFileWatcher()
-                this.initiateBibWatcher()
-                this.parseFileAndSubs(this.rootFile) // finish the parsing is required for subsequent refreshes.
+                this.bibWatcher.initiateBibWatcher()
+                this.parseFileAndSubs(this.rootFile, this.rootFile) // Finishing the parsing is required for subsequent refreshes.
                 this.extension.structureProvider.refresh()
                 this.extension.structureProvider.update()
             } else {
@@ -279,60 +282,15 @@ export class Manager {
         return undefined
     }
 
-    private findRootFromMagic(): string | undefined {
-        if (!vscode.window.activeTextEditor) {
-            return undefined
-        }
-        const regex = /^(?:%\s*!\s*T[Ee]X\sroot\s*=\s*(.*\.tex)$)/m
-        let content = vscode.window.activeTextEditor.document.getText()
-
-        let result = content.match(regex)
-        const fileStack: string[] = []
-        if (result) {
-            let file = path.resolve(path.dirname(vscode.window.activeTextEditor.document.fileName), result[1])
-            if (!fs.existsSync(file)) {
-                const msg = `Not found root file specified in the magic comment: ${file}`
-                this.extension.logger.addLogMessage(msg)
-                throw new Error(msg)
-            }
-            fileStack.push(file)
-            this.extension.logger.addLogMessage(`Found root file by magic comment: ${file}`)
-
-            content = fs.readFileSync(file).toString()
-            result = content.match(regex)
-
-            while (result) {
-                file = path.resolve(path.dirname(file), result[1])
-                if (fileStack.includes(file)) {
-                    this.extension.logger.addLogMessage(`Looped root file by magic comment found: ${file}, stop here.`)
-                    return file
-                } else {
-                    fileStack.push(file)
-                    this.extension.logger.addLogMessage(`Recursively found root file by magic comment: ${file}`)
-                }
-
-                if (!fs.existsSync(file)) {
-                    const msg = `Not found root file specified in the magic comment: ${file}`
-                    this.extension.logger.addLogMessage(msg)
-                    throw new Error(msg)
-                }
-                content = fs.readFileSync(file).toString()
-                result = content.match(regex)
-            }
-            return file
-        }
-        return undefined
-    }
-
     private findRootFromActive(): string | undefined {
         if (!vscode.window.activeTextEditor) {
             return undefined
         }
         const regex = /\\begin{document}/m
-        const content = utils.stripComments(vscode.window.activeTextEditor.document.getText(), '%')
+        const content = utils.stripComments(vscode.window.activeTextEditor.document.getText())
         const result = content.match(regex)
         if (result) {
-            const rootSubFile = this.findSubFiles(content)
+            const rootSubFile = this.finderUtils.findSubFiles(content)
             const file = vscode.window.activeTextEditor.document.fileName
             if (rootSubFile) {
                this.localRootFile = file
@@ -341,24 +299,6 @@ export class Manager {
                 this.extension.logger.addLogMessage(`Found root file from active editor: ${file}`)
                 return file
             }
-        }
-        return undefined
-    }
-
-    private findSubFiles(content: string): string | undefined {
-        if (!vscode.window.activeTextEditor) {
-            return undefined
-        }
-        const regex = /(?:\\documentclass\[(.*)\]{subfiles})/
-        const result = content.match(regex)
-        if (result) {
-            const file = utils.resolveFile([path.dirname(vscode.window.activeTextEditor.document.fileName)], result[1])
-            if (file) {
-                this.extension.logger.addLogMessage(`Found root file of this subfile from active editor: ${file}`)
-            } else {
-                this.extension.logger.addLogMessage(`Cannot find root file of this subfile from active editor: ${result[1]}`)
-            }
-            return file
         }
         return undefined
     }
@@ -379,7 +319,12 @@ export class Manager {
             const files = await vscode.workspace.findFiles(rootFilesIncludeGlob, rootFilesExcludeGlob)
             const candidates: string[] = []
             for (const file of files) {
-                const content = utils.stripComments(fs.readFileSync(file.fsPath).toString(), '%')
+                const flsChildren = this.getTeXChildrenFromFls(file.fsPath)
+                if (vscode.window.activeTextEditor && flsChildren.includes(vscode.window.activeTextEditor.document.fileName)) {
+                    this.extension.logger.addLogMessage(`Found root file from '.fls': ${file.fsPath}`)
+                    return file.fsPath
+                }
+                const content = utils.stripComments(fs.readFileSync(file.fsPath).toString())
                 const result = content.match(regex)
                 if (result) {
                     // Can be a root
@@ -401,13 +346,44 @@ export class Manager {
     }
 
     /**
-     * Returns a string array which holds all imported tex files
-     * from the given `file`. If `file` is `undefined`, traces from the
+     * Return a string array which holds all imported bib files
+     * from the given tex `file`. If `file` is `undefined`, traces from the
      * root file, or return empty array if the root file is `undefined`
      *
      * @param file The path of a LaTeX file
      */
-    getIncludedTeX(file?: string, includedTeX: string[] = []) {
+    getIncludedBib(file?: string, includedBib: string[] = [], children: string[] = []): string[] {
+        if (file === undefined) {
+            file = this.rootFile
+        }
+        if (file === undefined) {
+            return []
+        }
+        if (!(file in this.extension.manager.cachedContent)) {
+            return []
+        }
+        children.push(file)
+        includedBib.push(...this.extension.manager.cachedContent[file].bibs)
+        for (const child of this.extension.manager.cachedContent[file].children) {
+            if (children.includes(child.file)) {
+                // Already parsed
+                continue
+            }
+            this.getIncludedBib(child.file, includedBib)
+        }
+        // Make sure to return an array with unique entries
+        return Array.from(new Set(includedBib))
+    }
+
+    /**
+     * Return a string array which holds all imported tex files
+     * from the given `file` including the `file` itself.
+     * If `file` is `undefined`, trace from the * root file,
+     * or return empty array if the root file is `undefined`
+     *
+     * @param file The path of a LaTeX file
+     */
+    getIncludedTeX(file?: string, includedTeX: string[] = []): string[] {
         if (file === undefined) {
             file = this.rootFile
         }
@@ -438,7 +414,7 @@ export class Manager {
             }
             return this.cachedContent[cachedFile].content
         }
-        const fileContent = utils.stripComments(fs.readFileSync(file).toString(), '%')
+        const fileContent = utils.stripComments(fs.readFileSync(file).toString())
         this.cachedContent[file] = {content: fileContent, element: {}, children: [], bibs: []}
         return fileContent
     }
@@ -461,12 +437,16 @@ export class Manager {
      * This function is called when the root file is found or a watched file is changed.
      *
      * @param file The path of a LaTeX file. It is added to the watcher if not being watched.
+     * @param baseFile The file currently considered as the rootFile. If undefined, we use `file`
      * @param onChange If `true`, the content of `file` is read from the file system. If `false`, the cache of `file` is used.
      */
-    private parseFileAndSubs(file: string, onChange: boolean = false) {
+    parseFileAndSubs(file: string, baseFile: string | undefined, onChange: boolean = false) {
         if (this.isExcluded(file)) {
             this.extension.logger.addLogMessage(`Ignoring: ${file}`)
             return
+        }
+        if (baseFile === undefined) {
+            baseFile = file
         }
         this.extension.logger.addLogMessage(`Parsing a file and its subfiles: ${file}`)
         if (this.fileWatcher && !this.filesWatched.includes(file)) {
@@ -478,7 +458,7 @@ export class Manager {
         this.cachedContent[file].children = []
         this.cachedContent[file].bibs = []
         this.cachedFullContent = undefined
-        this.parseInputFiles(content, file)
+        this.parseInputFiles(content, file, baseFile)
         this.parseBibFiles(content, file)
         // We need to parse the fls to discover file dependencies when defined by TeX macro
         // It happens a lot with subfiles, https://tex.stackexchange.com/questions/289450/path-of-figures-in-different-directories-with-subfile-latex
@@ -532,9 +512,17 @@ export class Manager {
         return content
     }
 
+    /**
+     * Return the list of files (recursively) included in `file`
+     *
+     * @param file The file in which children are recursively computed
+     * @param baseFile The file currently considered as the rootFile
+     * @param children The list of already computed children
+     * @param content The content of `file`. If undefined, it is read from disk
+     */
     private getTeXChildren(file: string, baseFile: string, children: string[], content?: string): string[] {
         if (content === undefined) {
-            content = utils.stripComments(fs.readFileSync(file).toString(), '%')
+            content = utils.stripComments(fs.readFileSync(file).toString())
         }
 
         // Update children of current file
@@ -547,7 +535,7 @@ export class Manager {
                     break
                 }
 
-                const inputFile = this.parseInputFilePath(result, baseFile)
+                const inputFile = this.pathUtils.parseInputFilePath(result, file, baseFile)
 
                 if (!inputFile ||
                     !fs.existsSync(inputFile) ||
@@ -573,7 +561,17 @@ export class Manager {
         return children
     }
 
-    private parseInputFiles(content: string, baseFile: string) {
+    private getTeXChildrenFromFls(texFile: string) {
+        const flsFile = this.pathUtils.getFlsFilePath(texFile)
+        if (flsFile === undefined) {
+            return []
+        }
+        const rootDir = path.dirname(texFile)
+        const ioFiles = this.pathUtils.parseFlsContent(fs.readFileSync(flsFile).toString(), rootDir)
+        return ioFiles.input
+    }
+
+    private parseInputFiles(content: string, currentFile: string, baseFile: string) {
         const inputReg = /(?:\\(?:input|InputIfFileExists|include|SweaveInput|subfile|(?:(?:sub)?(?:import|inputfrom|includefrom)\*?{([^}]*)}))(?:\[[^[\]{}]*\])?){([^}]*)}/g
         while (true) {
             const result = inputReg.exec(content)
@@ -581,7 +579,7 @@ export class Manager {
                 break
             }
 
-            const inputFile = this.parseInputFilePath(result, baseFile)
+            const inputFile = this.pathUtils.parseInputFilePath(result, currentFile, baseFile)
 
             if (!inputFile ||
                 !fs.existsSync(inputFile) ||
@@ -595,24 +593,10 @@ export class Manager {
             })
 
             if (this.filesWatched.includes(inputFile)) {
+                /* We already watch this file, no need to enforce a new parsing */
                 continue
             }
-            this.parseFileAndSubs(inputFile)
-        }
-    }
-
-    private parseInputFilePath(regResult: RegExpExecArray, baseFile: string): string | undefined {
-        const texDirs = vscode.workspace.getConfiguration('latex-workshop').get('latex.texDirs') as string[]
-        if (regResult[0].startsWith('\\subimport') || regResult[0].startsWith('\\subinputfrom') || regResult[0].startsWith('\\subincludefrom')) {
-            return utils.resolveFile([path.dirname(baseFile)], path.join(regResult[1], regResult[2]))
-        } else if (regResult[0].startsWith('\\import') || regResult[0].startsWith('\\inputfrom') || regResult[0].startsWith('\\includefrom')) {
-            return utils.resolveFile([regResult[1]], regResult[2])
-        } else {
-            if (this.rootFile) {
-                return utils.resolveFile([path.dirname(baseFile), path.dirname(this.rootFile), ...texDirs], regResult[2])
-            } else {
-                return utils.resolveFile([path.dirname(baseFile), ...texDirs], regResult[2])
-            }
+            this.parseFileAndSubs(inputFile, baseFile)
         }
     }
 
@@ -627,12 +611,12 @@ export class Manager {
                 return bib.trim()
             })
             for (const bib of bibs) {
-                const bibPath = this.resolveBibPath(bib, path.dirname(baseFile))
+                const bibPath = this.pathUtils.resolveBibPath(bib, path.dirname(baseFile))
                 if (bibPath === undefined) {
                     continue
                 }
                 this.cachedContent[baseFile].bibs.push(bibPath)
-                this.watchBibFile(bibPath)
+                this.bibWatcher.watchBibFile(bibPath)
             }
         }
     }
@@ -643,20 +627,17 @@ export class Manager {
      * and all `OUTPUT` files will be checked if they are `.aux` files.
      * If so, the `.aux` files are parsed for any possible `.bib` files.
      *
-     * @param srcFile The path of a LaTeX file.
+     * @param texFile The path of a LaTeX file.
      */
-    parseFlsFile(srcFile: string) {
+    parseFlsFile(texFile: string) {
         this.extension.logger.addLogMessage('Parse fls file.')
-        const rootDir = path.dirname(srcFile)
-        const outDir = this.getOutDir(srcFile)
-        const baseName = path.parse(srcFile).name
-        const flsFile = path.resolve(rootDir, path.join(outDir, baseName + '.fls'))
-        if (!fs.existsSync(flsFile)) {
-            this.extension.logger.addLogMessage(`Cannot find fls file: ${flsFile}`)
+        const flsFile = this.pathUtils.getFlsFilePath(texFile)
+        if (flsFile === undefined) {
             return
         }
-        this.extension.logger.addLogMessage(`Fls file found: ${flsFile}`)
-        const ioFiles = this.parseFlsContent(fs.readFileSync(flsFile).toString(), rootDir)
+        const rootDir = path.dirname(texFile)
+        const outDir = this.getOutDir(texFile)
+        const ioFiles = this.pathUtils.parseFlsContent(fs.readFileSync(flsFile).toString(), rootDir)
 
         ioFiles.input.forEach((inputFile: string) => {
             // Drop files that are also listed as OUTPUT or should be ignored
@@ -666,16 +647,16 @@ export class Manager {
                 return
             }
             // Drop the current rootFile often listed as INPUT and drop any file that is already in the texFileTree
-            if (srcFile === inputFile || inputFile in this.cachedContent) {
+            if (texFile === inputFile || inputFile in this.cachedContent) {
                 return
             }
             if (path.extname(inputFile) === '.tex') {
                 // Parse tex files as imported subfiles.
-                this.cachedContent[srcFile].children.push({
+                this.cachedContent[texFile].children.push({
                     index: Number.MAX_VALUE,
                     file: inputFile
                 })
-                this.parseFileAndSubs(inputFile)
+                this.parseFileAndSubs(inputFile, texFile)
             } else if (this.fileWatcher && !this.filesWatched.includes(inputFile)) {
                 // Watch non-tex files.
                 this.fileWatcher.add(inputFile)
@@ -703,44 +684,16 @@ export class Manager {
                 return bib.trim()
             })
             for (const bib of bibs) {
-                const bibPath = this.resolveBibPath(bib, srcDir)
+                const bibPath = this.pathUtils.resolveBibPath(bib, srcDir)
                 if (bibPath === undefined) {
                     continue
                 }
                 if (this.rootFile && !this.cachedContent[this.rootFile].bibs.includes(bibPath)) {
                     this.cachedContent[this.rootFile].bibs.push(bibPath)
                 }
-                this.watchBibFile(bibPath)
+                this.bibWatcher.watchBibFile(bibPath)
             }
         }
-    }
-
-    private parseFlsContent(content: string, rootDir: string): {input: string[], output: string[]} {
-        const inputFiles: Set<string> = new Set()
-        const outputFiles: Set<string> = new Set()
-        const regex = /^(?:(INPUT)\s*(.*))|(?:(OUTPUT)\s*(.*))$/gm
-        // regex groups
-        // #1: an INPUT entry --> #2 input file path
-        // #3: an OUTPUT entry --> #4: output file path
-        while (true) {
-            const result = regex.exec(content)
-            if (!result) {
-                break
-            }
-            if (result[1]) {
-                const inputFilePath = path.resolve(rootDir, result[2])
-                if (inputFilePath) {
-                    inputFiles.add(inputFilePath)
-                }
-            } else if (result[3]) {
-                const outputFilePath = path.resolve(rootDir, result[4])
-                if (outputFilePath) {
-                    outputFiles.add(outputFilePath)
-                }
-            }
-        }
-
-        return {input: Array.from(inputFiles), output: Array.from(outputFiles)}
     }
 
     private initiateFileWatcher() {
@@ -759,10 +712,14 @@ export class Manager {
     }
 
     private createFileWatcher() {
-        this.extension.logger.addLogMessage(`Instantiating a new file watcher for ${this.rootFile}`)
+        this.extension.logger.addLogMessage(`Creating a new file watcher for ${this.rootFile}`)
         if (this.rootFile) {
+            this.extension.logger.addLogMessage(`watcherOptions: ${JSON.stringify(this.watcherOptions)}`)
             this.fileWatcher = chokidar.watch(this.rootFile, this.watcherOptions)
             this.filesWatched.push(this.rootFile)
+        } else {
+            this.extension.logger.addLogMessage('Cannot find rootFile.')
+            this.extension.logger.addLogMessage('Cannot create a new file watcher.')
         }
         if (this.fileWatcher) {
             this.fileWatcher.on('add', (file: string) => this.onWatchingNewFile(file))
@@ -780,6 +737,7 @@ export class Manager {
         this.filesWatched = []
         // We also clean the completions from the old project
         this.extension.completer.input.reset()
+        this.extension.duplicateLabels.reset()
     }
 
     private onWatchingNewFile(file: string) {
@@ -795,35 +753,10 @@ export class Manager {
         // It is possible for either tex or non-tex files in the watcher.
         if (['.tex', '.bib'].concat(this.weaveExt).includes(path.extname(file)) &&
             !file.includes('expl3-code.tex')) {
-            this.parseFileAndSubs(file, true)
+            this.parseFileAndSubs(file, this.rootFile, true)
             this.updateCompleterOnChange(file)
         }
         this.buildOnFileChanged(file)
-    }
-
-    private initiateBibWatcher() {
-        if (this.bibWatcher !== undefined) {
-            return
-        }
-        this.extension.logger.addLogMessage('Creating Bib file watcher.')
-        this.bibWatcher = chokidar.watch([], this.watcherOptions)
-        this.bibWatcher.on('change', (file: string) => this.onWatchedBibChanged(file))
-        this.bibWatcher.on('unlink', (file: string) => this.onWatchedBibDeleted(file))
-    }
-
-    private onWatchedBibChanged(file: string) {
-        this.extension.logger.addLogMessage(`Bib file watcher - file changed: ${file}`)
-        this.extension.completer.citation.parseBibFile(file)
-        this.buildOnFileChanged(file, true)
-    }
-
-    private onWatchedBibDeleted(file: string) {
-        this.extension.logger.addLogMessage(`Bib file watcher - file deleted: ${file}`)
-        if (this.bibWatcher) {
-            this.bibWatcher.unwatch(file)
-        }
-        this.bibsWatched.splice(this.bibsWatched.indexOf(file), 1)
-        this.extension.completer.citation.removeEntriesInFile(file)
     }
 
     private onWatchedFileDeleted(file: string) {
@@ -840,38 +773,15 @@ export class Manager {
         }
     }
 
-    private initiatePdfWatcher() {
-        if (this.pdfWatcher !== undefined) {
-            return
-        }
-        this.extension.logger.addLogMessage('Creating PDF file watcher.')
-        this.pdfWatcher = chokidar.watch([], this.pdfWatcherOptions)
-        this.pdfWatcher.on('change', (file: string) => this.onWatchedPdfChanged(file))
-        this.pdfWatcher.on('unlink', (file: string) => this.onWatchedPdfDeleted(file))
-    }
-
-    private onWatchedPdfChanged(file: string) {
-        this.extension.logger.addLogMessage(`PDF file watcher - file changed: ${file}`)
-        this.extension.viewer.refreshExistingViewer()
-    }
-
-    private onWatchedPdfDeleted(file: string) {
-        this.extension.logger.addLogMessage(`PDF file watcher - file deleted: ${file}`)
-        if (this.pdfWatcher) {
-            this.pdfWatcher.unwatch(file)
-        }
-        this.pdfsWatched.splice(this.pdfsWatched.indexOf(file), 1)
+    onDidUpdateIntellisense(cb: (file: string) => void) {
+        return this.intellisenseWatcher.onDidUpdateIntellisense(cb)
     }
 
     watchPdfFile(pdfPath: string) {
-        if (this.pdfWatcher && !this.pdfsWatched.includes(pdfPath)) {
-            this.extension.logger.addLogMessage(`Added to PDF file watcher: ${pdfPath}`)
-            this.pdfWatcher.add(pdfPath)
-            this.pdfsWatched.push(pdfPath)
-        }
+        this.pdfWatcher.watchPdfFile(pdfPath)
     }
 
-    private buildOnFileChanged(file: string, bibChanged: boolean = false) {
+    buildOnFileChanged(file: string, bibChanged: boolean = false) {
         const configuration = vscode.workspace.getConfiguration('latex-workshop')
         if (configuration.get('latex.autoBuild.run') as string !== BuildEvents.onFileChange) {
             return
@@ -909,6 +819,7 @@ export class Manager {
             const nodes = latexAst.content
             const lines = content.split('\n')
             this.extension.completer.reference.update(file, nodes, lines)
+            this.extension.completer.glossary.update(file, nodes)
             this.extension.completer.environment.update(file, nodes, lines)
             this.extension.completer.command.update(file, nodes)
             this.extension.completer.command.updatePkg(file, nodes)
@@ -916,66 +827,14 @@ export class Manager {
             this.extension.logger.addLogMessage(`Cannot parse a TeX file: ${file}`)
             this.extension.logger.addLogMessage('Fall back to regex-based completion.')
             // Do the update with old style.
-            const contentNoComment = utils.stripComments(content, '%')
+            const contentNoComment = utils.stripComments(content)
             this.extension.completer.reference.update(file, undefined, undefined, contentNoComment)
+            this.extension.completer.glossary.update(file, undefined, contentNoComment)
             this.extension.completer.environment.update(file, undefined, undefined, contentNoComment)
             this.extension.completer.command.update(file, undefined, contentNoComment)
             this.extension.completer.command.updatePkg(file, undefined, contentNoComment)
         }
-    }
-
-    private kpsewhichBibPath(bib: string): string | undefined {
-        const kpsewhich = vscode.workspace.getConfiguration('latex-workshop').get('kpsewhich.path') as string
-        this.extension.logger.addLogMessage(`Calling ${kpsewhich} to resolve file: ${bib}`)
-        try {
-            const kpsewhichReturn = cs.sync(kpsewhich, ['-format=.bib', bib])
-            if (kpsewhichReturn.status === 0) {
-                const bibPath = kpsewhichReturn.stdout.toString().replace(/\r?\n/, '')
-                if (bibPath === '') {
-                    return undefined
-                } else {
-                    this.extension.logger.addLogMessage(`Found .bib file using kpsewhich: ${bibPath}`)
-                    return bibPath
-                }
-            }
-        } catch(e) {
-            this.extension.logger.addLogMessage(`Cannot run kpsewhich to resolve .bib file: ${bib}`)
-        }
-        return undefined
-    }
-
-    private resolveBibPath(bib: string, baseDir: string) {
-        const configuration = vscode.workspace.getConfiguration('latex-workshop')
-        const bibDirs = configuration.get('latex.bibDirs') as string[]
-        let searchDirs: string[]
-        if (this.rootDir) {
-            // chapterbib requires to load the .bib file in every chapter using
-            // the path relative to the rootDir
-            searchDirs = [this.rootDir, baseDir, ...bibDirs]
-        } else {
-            searchDirs = [baseDir, ...bibDirs]
-        }
-        const bibPath = utils.resolveFile(searchDirs, bib, '.bib')
-
-        if (!bibPath) {
-            this.extension.logger.addLogMessage(`Cannot find .bib file: ${bib}`)
-            if (configuration.get('kpsewhich.enabled')) {
-                return this.kpsewhichBibPath(bib)
-            } else {
-                return undefined
-            }
-        }
-        this.extension.logger.addLogMessage(`Found .bib file: ${bibPath}`)
-        return bibPath
-    }
-
-    private watchBibFile(bibPath: string) {
-        if (this.bibWatcher && !this.bibsWatched.includes(bibPath)) {
-            this.extension.logger.addLogMessage(`Added to bib file watcher: ${bibPath}`)
-            this.bibWatcher.add(bibPath)
-            this.bibsWatched.push(bibPath)
-            this.extension.completer.citation.parseBibFile(bibPath)
-        }
+        this.extension.manager.intellisenseWatcher.emitUpdate(file)
     }
 
     setEnvVar() {

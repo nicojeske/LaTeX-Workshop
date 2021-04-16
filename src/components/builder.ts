@@ -7,7 +7,7 @@ import * as tmp from 'tmp'
 import {Mutex} from '../lib/await-semaphore'
 import {replaceArgumentPlaceholders} from '../utils/utils'
 
-import {Extension} from '../main'
+import type {Extension} from '../main'
 
 const maxPrintLine = '10000'
 const texMagicProgramName = 'TeXMagicProgram'
@@ -31,6 +31,7 @@ export class Builder {
             this.tmpDir = tmp.dirSync({unsafeCleanup: true}).name.split(path.sep).join('/')
         } catch (e) {
             vscode.window.showErrorMessage('Error during making tmpdir to build TeX files. Please check the environment variables, TEMP, TMP, and TMPDIR on your system.')
+            console.log(`TEMP, TMP, and TMPDIR: ${JSON.stringify([process.env.TEMP, process.env.TMP, process.env.TMPDIR])}`)
             throw e
         }
         this.buildMutex = new Mutex()
@@ -53,13 +54,21 @@ export class Builder {
         const proc = this.currentProcess
         if (proc) {
             const pid = proc.pid
-            if (process.platform === 'linux' || process.platform === 'darwin') {
-                cp.exec(`pkill -P ${pid}`)
-            } else if (process.platform === 'win32') {
-                cp.exec(`taskkill /F /T /PID ${pid}`)
+            try {
+                this.extension.logger.addLogMessage(`Kill child processes of the current process. PPID: ${pid}`)
+                if (process.platform === 'linux' || process.platform === 'darwin') {
+                    cp.execSync(`pkill -P ${pid}`, { timeout: 1000 })
+                } else if (process.platform === 'win32') {
+                    cp.execSync(`taskkill /F /T /PID ${pid}`, { timeout: 1000 })
+                }
+            } catch (e) {
+                if (e instanceof Error) {
+                    this.extension.logger.addLogMessage(`Error when killing child processes of the current process. ${e.message}`)
+                }
+            } finally {
+                proc.kill()
+                this.extension.logger.addLogMessage(`Kill the current process. PID: ${pid}`)
             }
-            proc.kill()
-            this.extension.logger.addLogMessage(`Kill the current process. PID: ${pid}.`)
         } else {
             this.extension.logger.addLogMessage('LaTeX build process to kill is not found.')
         }
@@ -136,7 +145,7 @@ export class Builder {
         })
 
         this.currentProcess.on('exit', (exitCode, signal) => {
-            this.extension.logParser.parse(stdout)
+            this.extension.compilerLogParser.parse(stdout)
             if (exitCode !== 0) {
                 this.extension.logger.addLogMessage(`Build returns with error: ${exitCode}/${signal}. PID: ${pid}.`)
                 this.extension.logger.displayStatus('x', 'errorForeground', 'Build terminated with error', 'warning')
@@ -232,7 +241,12 @@ export class Builder {
             }
             this.extension.manager.getIncludedTeX(rootFile).forEach(file => {
                 const relativePath = path.dirname(file.replace(rootDir, '.'))
-                fs.ensureDirSync(path.resolve(outDir, relativePath))
+                const fullOutDir = path.resolve(outDir, relativePath)
+                // To avoid issues when fullOutDir is the root dir
+                // Using fs.mkdir() on the root directory even with recursion will result in an error
+                if (! (fs.pathExistsSync(fullOutDir) && fs.statSync(fullOutDir).isDirectory())) {
+                    fs.ensureDirSync(fullOutDir)
+                }
             })
             this.buildInitiator(rootFile, languageId, recipeName, releaseBuildMutex)
         } catch (e) {
@@ -264,6 +278,7 @@ export class Builder {
         }
         this.extension.logger.displayStatus('sync~spin', 'statusBar.foreground', undefined, undefined, ` ${this.progressString(recipeName, steps, index)}`)
         this.extension.logger.addLogMessage(`Recipe step ${index + 1}: ${steps[index].command}, ${steps[index].args}`)
+        this.extension.logger.addLogMessage(`Recipe step env: ${JSON.stringify(steps[index].env)}`)
         this.extension.manager.setEnvVar()
         const envVars: ProcessEnv = {}
         Object.keys(process.env).forEach(key => envVars[key] = process.env[key])
@@ -313,7 +328,7 @@ export class Builder {
 
         this.currentProcess.on('error', err => {
             this.extension.logger.addLogMessage(`LaTeX fatal error: ${err.message}, ${stderr}. PID: ${pid}.`)
-            this.extension.logger.addLogMessage(`Does the executable exist? PATH: ${process.env.PATH}`)
+            this.extension.logger.addLogMessage(`Does the executable exist? PATH: ${envVars['PATH']}`)
             this.extension.logger.addLogMessage(`The environment variable $SHELL: ${process.env.SHELL}`)
             this.extension.logger.displayStatus('x', 'errorForeground', `Recipe terminated with fatal error: ${err.message}.`, 'error')
             this.currentProcess = undefined
@@ -322,10 +337,10 @@ export class Builder {
         })
 
         this.currentProcess.on('exit', (exitCode, signal) => {
-            this.extension.logParser.parse(stdout, rootFile)
+            this.extension.compilerLogParser.parse(stdout, rootFile)
             if (exitCode !== 0) {
                 this.extension.logger.addLogMessage(`Recipe returns with error: ${exitCode}/${signal}. PID: ${pid}. message: ${stderr}.`)
-                this.extension.logger.addLogMessage(`The environment variable $PATH: ${process.env.PATH}`)
+                this.extension.logger.addLogMessage(`The environment variable $PATH: ${envVars['PATH']}`)
                 this.extension.logger.addLogMessage(`The environment variable $SHELL: ${process.env.SHELL}`)
                 this.extension.buildInfo.buildEnded()
 
@@ -385,7 +400,7 @@ export class Builder {
         this.extension.buildInfo.buildEnded()
         this.extension.logger.addLogMessage(`Successfully built ${rootFile}.`)
         this.extension.logger.displayStatus('check', 'statusBar.foreground', 'Recipe succeeded.')
-        if (this.extension.logParser.isLaTeXmkSkipped) {
+        if (this.extension.compilerLogParser.isLaTeXmkSkipped) {
             return
         }
         this.extension.viewer.refreshExistingViewer(rootFile)
