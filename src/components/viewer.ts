@@ -159,16 +159,17 @@ export class Viewer {
 
     private checkViewer(sourceFile: string, respectOutDir: boolean = true): string | undefined {
         const pdfFile = this.extension.manager.tex2pdf(sourceFile, respectOutDir)
+        const configuration = vscode.workspace.getConfiguration('latex-workshop')
+        const viewerURL = configuration.get('viewer.pdf.internal.url') as string
         if (!fs.existsSync(pdfFile)) {
             this.extension.logger.addLogMessage(`Cannot find PDF file ${pdfFile}`)
             this.extension.logger.displayStatus('check', 'statusBar.foreground', `Cannot view file PDF file. File not found: ${pdfFile}`, 'warning')
             return
         }
         if (this.extension.server.address === undefined) {
-            this.extension.logger.addLogMessage('Cannot establish server connection.')
-            return
+            this.extension.logger.addLogMessage('Cannot establish server connection. Just opening in case it is already running.')
         }
-        const url = `${this.extension.server.url}/viewer.html?file=${encodePathWithPrefix(pdfFile)}`
+        const url = `${viewerURL}/viewer.html?file=${encodePathWithPrefix(pdfFile)}`
         this.extension.logger.addLogMessage(`Serving PDF file at ${url}`)
         this.extension.logger.addLogMessage(`The encoded path is ${pdfFile}`)
         return url
@@ -226,9 +227,8 @@ export class Viewer {
 
     private async createPdfViewerPanel(pdfFilePath: string, viewColumn: vscode.ViewColumn): Promise<PdfViewerPanel | undefined> {
         if (this.extension.server.port === undefined) {
-            this.extension.logger.addLogMessage('Server port is undefined')
-            return
-        }
+            this.extension.logger.addLogMessage('Server port is undefined. Just opening in case it is already running')
+            }
         const htmlContent = await this.getPDFViewerContent(pdfFilePath)
         const panel = vscode.window.createWebviewPanel('latex-workshop-pdf', path.basename(pdfFilePath), viewColumn, {
             enableScripts: true,
@@ -271,13 +271,15 @@ export class Viewer {
      */
     async getPDFViewerContent(pdfFile: string): Promise<string> {
         // viewer/viewer.js automatically requests the file to server.ts, and server.ts decodes the encoded path of PDF file.
-        const origUrl = `http://localhost:${this.extension.server.port}/viewer.html?incode=1&file=${encodePathWithPrefix(pdfFile)}`
+        const configuration = vscode.workspace.getConfiguration('latex-workshop')
+        const viewerURL = configuration.get('viewer.pdf.internal.url') as string
+        const origUrl = `${viewerURL}/viewer.html?incode=1&file=${encodePathWithPrefix(pdfFile)}`
         const url = await vscode.env.asExternalUri(vscode.Uri.parse(origUrl))
         const iframeSrcUrl = url.toString(true)
         this.extension.logger.addLogMessage(`The internal PDF viewer url: ${iframeSrcUrl}`)
         const rebroadcast: boolean = this.getKeyboardEventConfig()
         return `
-            <!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src http://localhost:* http://127.0.0.1:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';"></head>
+            <!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src ${viewerURL} http://localhost:* http://127.0.0.1:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';"></head>
             <body><iframe id="preview-panel" class="preview-panel" src="${iframeSrcUrl}" style="position:absolute; border: none; left: 0; top: 0; width: 100%; height: 100%;">
             </iframe>
             <script>
@@ -298,7 +300,7 @@ export class Viewer {
             // we have to dispatch keyboard events in the parent window.
             // See https://github.com/microsoft/vscode/issues/65452#issuecomment-586036474
             window.addEventListener('message', (e) => {
-                if (e.origin !== '${this.extension.server.url}') {
+                if (e.origin !== '${viewerURL}') {
                     return;
                 }
                 switch (e.data.type) {
